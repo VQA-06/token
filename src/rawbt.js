@@ -1,0 +1,112 @@
+export async function printViaRawBT(data) {
+  try {
+    const commands = generateEscPosCommands(data);
+    const base64Data = btoa(String.fromCharCode(...commands));
+    
+    // Construct Android Intent URL
+    // Documentation: https://rawbt.ru/api.html
+    const intentUrl = `intent:base64,${base64Data}#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;S.browser_fallback_url=${encodeURIComponent(window.location.href)};end;`;
+    
+    // Trigger Intent
+    window.location.href = intentUrl;
+
+  } catch (error) {
+    console.error('RawBT Print Error:', error);
+    throw new Error('Gagal membuka aplikasi RawBT.');
+  }
+}
+
+/**
+ * Generate ESC/POS Commands (Copied & Adapted from bluetooth.js)
+ */
+function generateEscPosCommands(data) {
+  const encoder = new TextEncoder();
+  const now = new Date();
+  const dateStr = now.toLocaleDateString('id-ID') + ' ' + now.toLocaleTimeString('id-id', { hour12: false }).replace(/\./g, ':');
+  
+  // ESC/POS Commands
+  const ESC = 0x1B;
+  const GS = 0x1D;
+  const LF = 0x0A;
+  
+  const commands = [
+    // Initialize
+    ESC, 0x40,
+    
+    // Header
+    ESC, 0x61, 0x01, // Center
+    ...encoder.encode(`** ${data.storeName.toUpperCase()} **\n`),
+    ...encoder.encode(`${dateStr} (CU)\n`),
+    LF,
+    ...encoder.encode('STRUK PEMBELIAN LISTRIK\n'),
+    ...encoder.encode('PRABAYAR\n'),
+    LF,
+    
+    ESC, 0x61, 0x00, // Left
+    ...encoder.encode(formatRow('IDPEL', `: ${data.idpel}`)),
+    ...encoder.encode(formatRow('NAMA', `: ${data.nama}`)),
+    ...encoder.encode(formatRow('TRF/DAYA', `: ${data.tarif}`)),
+    ...encoder.encode(formatRow('NOMINAL', `: RP. ${formatNumber(data.nominal)}`)),
+    ...encoder.encode(formatRow('PPN', `: RP. ${formatNumberDecimal(data.ppn)}`)),
+    ...encoder.encode(formatRow('ANGS/MAT', `: RP. 0,00/0,00`)),
+    ...encoder.encode(formatRow('RP TOKEN', `: RP. ${formatNumber(data.nominal)}`)),
+    ...encoder.encode(formatRow('JML KWH', `: ${formatKwh(data.kwh)}`)),
+    ...encoder.encode(formatRow('BIAYA ADM', `: RP. ${formatNumber(data.admin)}`)),
+    ESC, 0x45, 0x01, // Bold On
+    ...encoder.encode(formatRow('TOTAL BAYAR', `: RP. ${formatNumber(data.total)}`)),
+    ESC, 0x45, 0x00, // Bold Off
+    LF,
+    
+    ESC, 0x61, 0x01, // Center
+    ...encoder.encode('-- TOKEN --\n'),
+    ESC, 0x45, 0x01, // Bold On
+    GS, 0x21, 0x11, // Double height & width
+    ...encoder.encode(splitToken(data.token)),
+    GS, 0x21, 0x00, // Normal size
+    ESC, 0x45, 0x00, // Bold Off
+    LF,
+    
+    ESC, 0x61, 0x01, // Center
+    ...encoder.encode('Info Hubungi Call Center 123\n'),
+    ...encoder.encode('Atau Hubungi PLN Terdekat\n'),
+    LF, LF, LF, LF // Feed
+  ];
+
+  return new Uint8Array(commands); 
+}
+
+// Helpers
+function formatRow(label, value) {
+  const labelWidth = 10; 
+  const padding = ' '.repeat(Math.max(0, labelWidth - label.length));
+  return `   ${label}${padding}${value}\n`;
+}
+
+function splitToken(token) {
+  if (!token || token.length !== 20) return '---- ---- ---- ----\n---- ----';
+  const line1 = `${token.substring(0, 4)}-${token.substring(4, 8)}-${token.substring(8, 12)}`;
+  const line2 = `${token.substring(12, 16)}-${token.substring(16, 20)}`;
+  return `${line1}\n${line2}\n`;
+}
+
+function formatNumber(num) {
+  if (!num) return '0,00';
+  return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".") + ',00';
+}
+
+function formatNumberDecimal(val) {
+  if (!val) return '0,00';
+  let clean = val.toString().replace(/[^0-9,.]/g, '').replace(',', '.');
+  let num = parseFloat(clean);
+  if (isNaN(num)) return val;
+  return num.toFixed(2).replace('.', ',');
+}
+
+function formatKwh(val) {
+  if (!val) return '0,0';
+  let clean = val.toString().replace(/[^0-9,.]/g, '').replace(',', '.');
+  let num = parseFloat(clean);
+  if (isNaN(num)) return val;
+  if (!clean.includes('.') && num > 1000) num = num / 100;
+  return num.toFixed(1) + 'KWH';
+}
