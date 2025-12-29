@@ -89,26 +89,27 @@ function parsePLNText(text) {
 
   // 4. Extract Tarif/Daya
   // Robust Strategy: Capture widely, then sanitize.
-  // We explicitly stop at 'VA' if present, or avoid capturing 'No', 'Ref', etc.
   
   // Try to find specific pattern R../... VA first (most reliable)
-  let tarifMatch = text.match(/(R[\d\w]+\s*\/[\s\d]+\s*VA)/i);
+  // Updated to support decimals like 900.00
+  let tarifMatch = text.match(/(R[\d\w]+\s*\/[\s\d.]+\s*VA)/i);
   
   if (!tarifMatch) {
-    // Fallback: Look for label
-    tarifMatch = text.match(/(?:Tarif\/Daya|Tarif Daya|Daya)\s*[:]?\s*([A-Z0-9\/\s\-]+)/i);
+    // Fallback: Look for label. 
+    // Use word boundaries \b to avoid matching "HIDAYAT" as "DAYA"
+    tarifMatch = text.match(/\b(?:Tarif\/Daya|Tarif Daya|Tarif|Daya)\s*[:]?\s*([A-Z0-9\/\s.-]+)/i);
   }
 
   if (tarifMatch) {
     let raw = tarifMatch[1] ? tarifMatch[1] : tarifMatch[0];
     // Sanitize: 
-    // 1. Remove "No", "Ref", "Nama" if they accidentally got caught
-    // 2. If "VA" is in the string, cut everything after it.
-    
-    // Clean: Normalize spaces but keep dots/slashes
+    // 1. Normalize spaces
     let clean = raw.replace(/\s+/g, ' ').trim();
     
-    // Stop at common garbage words
+    // 2. Remove redundant labels if they got caught (e.g. "Tarif Daya R1M")
+    clean = clean.replace(/^(Tarif\/Daya|Tarif Daya|Tarif|Daya)\s*/i, '');
+
+    // 3. Stop at common garbage words
     clean = clean.replace(/\s(No|Ref|Nomor|Jam).*$/i, '');
     
     // Final Polish: Ensure VA suffix exists if it looks like a power value
