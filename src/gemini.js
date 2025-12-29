@@ -4,7 +4,7 @@
  */
 
 const API_KEY = 'AIzaSyC503nWGhR7BmW7jQSPg6GMoUzNZ6Cyvks';
-// Using v1beta and gemini-1.5-flash-latest
+// Using standard gemini-1.5-flash for maximum compatibility
 const API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${API_KEY}`;
 
 /**

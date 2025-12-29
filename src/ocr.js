@@ -180,14 +180,36 @@ function parsePLNText(text) {
     result.ppn = ppnMatch[1].trim().replace(/ /g, '');
   }
 
-  // 10. Extract ANGS/MAT (Angsuran/Materai)
-  const angsuranMatch = text.match(/Angsuran\s*Rp?([\d,.]+)/i);
-  const materaiMatch = text.match(/Materai\s*Rp?([\d,.]+)/i);
-  if (angsuranMatch && materaiMatch) {
-    result.angsmat = `${angsuranMatch[1]}/${materaiMatch[1]}`;
-  }
+  // Final sanitization for all results
+  Object.keys(result).forEach(key => {
+    if (typeof result[key] === 'string' && key !== 'raw') {
+        result[key] = cleanValue(result[key]);
+    }
+  });
 
   return result;
+}
+
+/**
+ * Global Sanitizer: Removes common labels that often get caught in OCR
+ * @param {string} val 
+ */
+function cleanValue(val) {
+  if (!val) return '';
+  let clean = val.replace(/\s+/g, ' ').trim();
+  
+  // List of labels to strip from the START of results
+  const labelsToRemove = [
+    /^T\s/i, // Prefix "T " like in user's error
+    /^(Nama|Tarif\/Daya|Tarif Daya|Tarif|Daya|IDPEL|Nomor Pelanggan|Nomor Meter|No\.\s*Ref|No|Ref|Stroom|Token)\s*[:.-]?\s*/i,
+    /^(Rp|RP)\.?\s*/i
+  ];
+
+  labelsToRemove.forEach(pattern => {
+    clean = clean.replace(pattern, '');
+  });
+
+  return clean.trim();
 }
 
 /**
