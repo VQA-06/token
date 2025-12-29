@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PLN Token OCR - Pintar Scan & Cetak</title>
+  <link rel="stylesheet" href="/style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.min.mjs" type="module"></script>
+</head>
+<body>
+  <div id="app">
+    <header class="glass-header">
+      <div class="logo">
+        <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M13 2L3 14H12V22L22 10H13V2Z" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span>PLN Token OCR</span>
+      </div>
+      <div class="header-actions">
+        <button id="settings-btn" class="btn-icon">⚙️</button>
+      </div>
+    </header>
+
+    <div id="settings-modal" class="modal hidden">
+      <div class="modal-content card">
+        <h3>Pengaturan</h3>
+        <div class="form-group">
+          <label>Nama Toko</label>
+          <input type="text" id="store-name-input" value="SA CELL">
+        </div>
+        <button id="save-settings" class="btn-primary full-width">Simpan</button>
+        <button id="install-btn" class="btn-secondary full-width hidden" style="margin-top: 0.75rem;">
+          <span class="icon">✨</span> Pasang Aplikasi (PWA)
+        </button>
+      </div>
+    </div>
+
+    <div id="preview-modal" class="modal hidden">
+      <div class="modal-content receipt-card scale-in">
+        <div class="preview-header">
+          <h3>Preview Struk</h3>
+          <button id="close-preview" class="btn-icon">✕</button>
+        </div>
+        <div class="thermal-preview" id="thermal-preview-content">
+          <!-- Content injected via JS -->
+          <div class="thermal-header">
+            <div id="pre-store">** SA CELL **</div>
+            <div id="pre-datetime">2025-12-27 13:00:00</div>
+          </div>
+          <div class="thermal-title">STRUK PEMBELIAN LISTRIK<br>PRABAYAR</div>
+          <div class="thermal-body">
+            <div class="row"><span>IDPEL</span><span>:</span><span id="pre-idpel">000000000000</span></div>
+            <div class="row"><span>NAMA</span><span>:</span><span id="pre-nama">-</span></div>
+            <div class="row"><span>TRF/DAYA</span><span>:</span><span id="pre-tarif">-</span></div>
+            <div class="row"><span>NOMINAL</span><span>:</span><span id="pre-nominal">RP. 0,00</span></div>
+            <div class="row"><span>PPN</span><span>:</span><span id="pre-ppn">RP. 0,00</span></div>
+            <div class="row"><span>ANGS/MAT</span><span>:</span><span id="pre-angsmat">RP. 0,00/0,00</span></div>
+            <div class="row"><span>RP TOKEN</span><span>:</span><span id="pre-rptoken">RP. 0,00</span></div>
+            <div class="row"><span>JML KWH</span><span>:</span><span id="pre-kwh">0.0</span></div>
+            <div class="row"><span>BIAYA ADM</span><span>:</span><span id="pre-admin">RP. 0,00</span></div>
+            <div class="row highlighted"><span>TOTAL BAYAR</span><span>:</span><span id="pre-total">RP. 0,00</span></div>
+          </div>
+          <div class="thermal-footer">
+            <div class="token-title">-- TOKEN --</div>
+            <div id="pre-token" class="token-value-large">0000-0000-0000<br>0000-0000</div>
+            <div class="info-footer">Info Hubungi Call Center 123<br>Atau Hubungi PLN Terdekat</div>
+          </div>
+        </div>
+        <button id="confirm-print-btn" class="btn-primary full-width">
+          <span class="icon">🖨️</span> Cetak Sekarang
+        </button>
+      </div>
+    </div>
+
+    <main>
+      <section id="scanner-section" class="card fade-in">
+        <div class="card-content">
+          <h1>Scan Struk Token</h1>
+          <p class="subtitle">Arahkan kamera ke struk pembelian atau upload foto</p>
+          
+          <div class="scanner-container">
+            <div id="scanner-overlay" class="hidden">
+              <div class="scanner-frame"></div>
+            </div>
+            <img id="image-preview" class="hidden">
+            <div id="drop-zone" class="drop-zone">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/>
+              </svg>
+              <span>Klik atau Drag Foto/PDF di sini</span>
+            </div>
+          </div>
+
+          <div class="controls">
+            <input type="file" id="file-input" accept="image/*,.pdf" hidden>
+            <button id="upload-btn" class="btn-primary full-width">
+              <span class="icon">📂</span> Upload File (Foto/PDF)
+            </button>
+          </div>
+          
+          <div id="ocr-status" class="status-bar hidden">
+            <div class="spinner"></div>
+            <span id="status-text">Memproses OCR...</span>
+          </div>
+        </div>
+      </section>
+
+      <section id="result-section" class="card hidden fade-in">
+        <div class="card-content">
+          <div class="card-header">
+            <h2>Detail Transaksi</h2>
+          </div>
+          
+          <div class="receipt-preview" id="receipt-data">
+            <div class="receipt-item">
+              <label>Nomor Token</label>
+              <div class="token-display" id="res-token">XXXX-XXXX-XXXX-XXXX-XXXX</div>
+            </div>
+            <div class="receipt-grid">
+              <div class="receipt-item">
+                <label>ID Pelanggan</label>
+                <div class="value" id="res-idpel">-</div>
+              </div>
+              <div class="receipt-item">
+                <label>Nama</label>
+                <div class="value" id="res-nama">-</div>
+              </div>
+              <div class="receipt-item">
+                <label>Tarif/Daya</label>
+                <div class="value" id="res-tarif">-</div>
+              </div>
+              <div class="receipt-item">
+                <label>KWh</label>
+                <div class="value" id="res-kwh">-</div>
+              </div>
+              <div class="receipt-item">
+                <label>Nominal</label>
+                <div class="value" id="res-nominal">-</div>
+              </div>
+              <div class="receipt-item">
+                <label>PPN</label>
+                <div class="value" id="res-ppn">-</div>
+              </div>
+              <div class="receipt-item">
+                <label>ANGS/MAT</label>
+                <div class="value" id="res-angsmat">-</div>
+              </div>
+              <div class="receipt-item">
+                <label>Admin</label>
+                <div class="admin-selector-compact">
+                  <select id="res-admin-select" class="select-compact">
+                    <option value="2000">Rp 2.000</option>
+                    <option value="3000" selected>Rp 3.000</option>
+                    <option value="4000">Rp 4.000</option>
+                  </select>
+                </div>
+              </div>
+              <div class="receipt-item total-item">
+                <label>Total Bayar</label>
+                <div class="value" id="res-total">-</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="actions">
+            <button id="print-btn" class="btn-primary full-width">
+              <span class="icon">🖨️</span> Cetak Struk
+            </button>
+            <button id="reset-btn" class="btn-ghost full-width">Ulangi Scan</button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <div id="toast" class="toast hidden"></div>
+  </div>
+  
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
