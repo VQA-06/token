@@ -5,6 +5,7 @@ export default defineConfig({
   server: {
     port: 0,
     strictPort: false,
+    host: true,
   },
   plugins: [
     VitePWA({

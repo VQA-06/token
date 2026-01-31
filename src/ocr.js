@@ -14,7 +14,7 @@ if (pdfjsLib) {
  * Perform OCR on an image and extract PLN receipt data
  * @param {string|Blob|File} imageSource 
  */
-export async function processReceipt(imageSource) {
+export async function processReceipt(imageSource, mode = 'token') {
   const worker = await createWorker('ind'); // Using Indonesian language
   
   try {
@@ -22,6 +22,11 @@ export async function processReceipt(imageSource) {
     await worker.terminate();
     
     console.log('Raw OCR Text:', text);
+    
+    if (mode === 'payment') {
+        console.log('Mode: Payment. Using Regex Parser.');
+        return parsePaymentText(text);
+    }
     
     // Full AI Parsing Mode - Gemini handles everything
     console.log('Using Gemini AI for parsing...');
@@ -60,6 +65,7 @@ function parsePLNText(text) {
     total: '',
     ppn: '0',
     angsmat: '0,00/0,00',
+    noPesanan: '', 
     raw: text
   };
 
@@ -213,6 +219,192 @@ function cleanValue(val) {
 }
 
 /**
+ * Parse raw text into structured Payment (PDAM) object
+ * @param {string} text 
+ */
+function parsePaymentText(text) {
+  const result = {
+    mode: 'payment',
+    lokasi: '',
+    nama: '',
+    idpel: '',
+    periode: '',
+    stand: '', // optional
+    tagihan: '',
+    admin: '',
+    total: '',
+    noPesanan: '', 
+    raw: text
+  };
+
+  // 1. Extract Lokasi
+  // Looks for common patterns like "PDAM ...", "KAB ...", "KOTA ..."
+  // or takes the first meaningful line if it looks like a header
+  // User Feedback: "KAB. SOLOK No" -> Remove " No"
+  const lokasiMatch = text.match(/(?:PDAM|PERUMDA|TIRTA)\s+([A-Z\s.]+)/i) || 
+                      text.match(/(?:KAB\.|KOTA)\s+([A-Z\s.]+)/i);
+  
+  if (lokasiMatch) {
+     let val = lokasiMatch[0].trim();
+     // Clean suffix " No", " Nomor", etc if captured accidentally
+     result.lokasi = val.replace(/\s(No|Nomor|Pelanggan).*$/i, '').trim();
+  } else {
+     // Fallback: Take first non-empty line that isn't a date
+     const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 3);
+     if (lines.length > 0 && !lines[0].match(/\d{4}-\d{2}-\d{2}/)) {
+        result.lokasi = lines[0].replace(/\s(No|Nomor|Pelanggan).*$/i, '').trim();
+     }
+  }
+
+  // 2. Extract Nama
+  // Rule: Capture everything on the same line after labeling, allowing special characters.
+  // We use word boundaries to avoid matching "Pelanggan" inside "ID Pelanggan".
+  const namaLabelPattern = /(?:\bNama Pelanggan|\bNama|\bNAMA\b)\s*[:]?\s*([^\n\r]+)/i;
+  const namaMatch = text.match(namaLabelPattern);
+  if (namaMatch) {
+    let rawNama = namaMatch[1].trim();
+    
+    // Safety: If the OCR caught the next field on the same line (e.g. "MARDALENA No. Pel"), 
+    // we prune at known field boundaries
+    const fields = ['NO.PEL', 'NO. PEL', 'ID PEL', 'IDPEL', 'NO SAMB', 'NO.SAMB', 'PERIODE', 'ALAMAT', 'TOTAL', 'TAGIHAN'];
+    let clean = rawNama;
+    for (const f of fields) {
+      const idx = clean.toUpperCase().indexOf(f);
+      if (idx !== -1) {
+        // Only prune if it looks like a separate word (preceded by space)
+        if (idx === 0 || /\s/.test(clean[idx - 1])) {
+          clean = clean.substring(0, idx).trim();
+        }
+      }
+    }
+    
+    // Final check to remove leading noise but preserve internal characters
+    result.nama = clean.replace(/^(?:Pelanggan|Plg|Nama)\s*[:.-]?\s*/i, '').trim();
+  }
+
+  // 3. Extract IDPEL / No Sambungan
+  const idpelMatch = text.match(/(?:Nomor|No\.|ID)\s*(?:Pelanggan|Sambungan|PEL|SAMB)\s*[:.]?\s*(\d+)/i) ||
+                     text.match(/(\d{6,12})/); // Raw digits fallback
+  if (idpelMatch) {
+    result.idpel = idpelMatch[1].trim();
+  }
+
+  // 4. Extract Periode
+  // Strategy: 
+  // A. Look for specific labels first
+  // B. Search for known date formats (Month Year)
+  
+  // 4. Extract Periode
+  
+  // A. Label Search
+  // User Feedback: "Periode Tagihan" is a specific section.
+  // We must match "Periode Tagihan" explicitly so "Tagihan" isn't treated as part of the value (and subsequently deleted by cleanup).
+  const periodeLabelMatch = text.match(/(?:Periode Tagihan|Periode|Bulan|Thn\.Bln|Rekoning Bulan|Rek\.Bulan)\s*[:]?\s*([^\n\r]+)/i);
+  if (periodeLabelMatch) {
+    let raw = periodeLabelMatch[1].trim();
+    
+    // Clean potential trailing garbage labels, BUT be careful not to delete the value itself if it starts with 'Tagihan' (unlikely if label fixed)
+    // We only remove if it looks like a separate label starting with "Tagihan:" or "Tagihan Rp" or similar noise at the END
+    // Original aggressive replace was: raw = raw.replace(/\s*(?:Tagihan|Meter|Lalu|Kini|Stanst|Stand).*$/i, '');
+    // New safer replace searches for known Next-Field labels
+    raw = raw.replace(/\s+(?:Meter|Lalu|Kini|Stanst|Stand|Total).*$/i, '');
+    
+    // Also remove "Tagihan" if it appears as a suffix label match, e.g. "202512 Tagihan..."
+    raw = raw.replace(/\s+Tagihan.*$/i, '');
+
+    if ((/\d{4}/.test(raw) || /[A-Za-z]{3}/.test(raw)) && raw.length < 20) {
+        result.periode = raw;
+    }
+  }
+
+  // A.5 Global Search REMOVED as per user request ("tidak perlu mencari YYYYMM pada keseluruhan")
+
+  // B. Fallback: Robust Date Pattern Search (Indonesian Months)
+  // If no result yet, look for "JAN 2025", "MEI 25"
+  if (!result.periode) {
+     const indoMonths = 'JAN|FEB|MAR|APR|MEI|JUN|JUL|AGU|SEP|OKT|NOV|DES|JANUARI|FEBRUARI|MARET|APRIL|MEI|JUNI|JULI|AGUSTUS|SEPTEMBER|OKTOBER|NOVEMBER|DESEMBER';
+     const datePattern = new RegExp(`\\b(${indoMonths})[\\s-]*(\\d{2,4})`, 'i');
+     const dateMatch = text.match(datePattern);
+     if (dateMatch) {
+         result.periode = `${dateMatch[1]} ${dateMatch[2]}`.toUpperCase();
+     }
+  }
+  
+  // C. Fallback: Numeric patterns MM/YYYY
+  if (!result.periode) {
+     const mmyyyyMatch = text.match(/\b(0[1-9]|1[0-2])[\/-](20\d{2})\b/);
+     if (mmyyyyMatch) {
+         result.periode = formatIndoMonth(mmyyyyMatch[1]) + ' ' + mmyyyyMatch[2];
+     }
+  }
+
+  // --- POST-PROCESSING PERIODE ---
+  // Ensure we format "202512" -> "DESEMBER 2025" regardless of how it was captured (Label or Fallback)
+  if (result.periode) {
+      // Clean up common noise
+      let clean = result.periode.replace(/\s*(?:Tagihan|Meter|Lalu|Kini|Stanst|Stand).*$/i, '').trim();
+      
+      // Check if it matches YYYYMM (ex: 202512)
+      // Allow minor noise or spaces: 2025 12
+      const yyyymmFormat = clean.match(/\b(20\d{2})\s?(0[1-9]|1[0-2])\b/); 
+      if (yyyymmFormat) {
+          const year = yyyymmFormat[1];
+          const month = yyyymmFormat[2];
+          clean = formatIndoMonth(month) + ' ' + year;
+      }
+
+      result.periode = clean.toUpperCase();
+  }
+
+  // 5. Extract Total Tagihan (before admin)
+  // Usually labeled "Tagihan", "Jumlah Tagihan", "Total Air"
+
+  // 5. Extract Total Tagihan (before admin)
+  // Usually labeled "Tagihan", "Jumlah Tagihan", "Total Air"
+  const tagihanMatch = text.match(/(?:Tagihan|Jml Tagihan|Total Air|Biaya Air)\s*[:]?\s*Rp?[\s.]*([\d,.]+)/i);
+  if (tagihanMatch) {
+    let raw = tagihanMatch[1].trim().replace(/\./g, '').replace(/,/g, '');
+    result.tagihan = raw;
+  }
+
+  // 6. Extract Admin (if present on receipt)
+  const adminMatch = text.match(/(?:Biaya Admin|Admin|Adm)\s*[:]?\s*Rp?[\s.]*([\d,.]+)/i);
+  if (adminMatch) {
+     let raw = adminMatch[1].trim().replace(/\./g, '').replace(/,/g, '');
+     result.admin = raw;
+  }
+
+  // 7. Extract Total Bayar
+  // Usually labeled "Total Bayar", "Total"
+  const totalMatch = text.match(/(?:Total Bayar|Total)\s*[:]?\s*Rp?[\s.]*([\d,.]+)/i);
+  if (totalMatch) {
+    let raw = totalMatch[1].trim().replace(/\./g, '').replace(/,/g, '');
+    result.total = raw;
+  }
+  
+  // If we found tagihan but no total, default total = tagihan
+  if (!result.total && result.tagihan) result.total = result.tagihan;
+  // If we found total but no tagihan, default tagihan = total
+  if (!result.tagihan && result.total) result.tagihan = result.total;
+
+  // 8. Extract No Pesanan
+  // Pattern: "No. Pesanan : 12345..." or "No Pesanan 12345..."
+  const noPesananMatch = text.match(/(?:No\.?|Nomor)\s*Pesanan\s*[:]?\s*([A-Z0-9]+)/i);
+  if (noPesananMatch) {
+    result.noPesanan = noPesananMatch[1].trim();
+  }
+
+  // Final sanitization for all results
+  Object.keys(result).forEach(key => {
+    if (typeof result[key] === 'string' && key !== 'raw' && key !== 'mode' && key !== 'nama') {
+        result[key] = cleanValue(result[key]);
+    }
+  });
+
+  return result;
+}
+
+/**
  * Process PDF file and return extracted data
  */
 export async function processPdf(pdfDataUrl) {
@@ -279,4 +471,14 @@ export function preprocessImage(image) {
   ctx.putImageData(imageData, 0, 0);
   
   return canvas.toDataURL('image/png');
+}
+
+function formatIndoMonth(monthStr) {
+    const months = [
+        'JANUARI', 'FEBRUARI', 'MARET', 'APRIL', 'MEI', 'JUNI', 
+        'JULI', 'AGUSTUS', 'SEPTEMBER', 'OKTOBER', 'NOVEMBER', 'DESEMBER'
+    ];
+    let idx = parseInt(monthStr) - 1;
+    if (idx >= 0 && idx < 12) return months[idx];
+    return monthStr;
 }

@@ -9,6 +9,7 @@
   --card-bg: #FFFFFF;
   --shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 8px 10px -6px rgba(0, 0, 0, 0.05);
   --radius: 16px;
+  --surface: #F1F5F9;
   --font-main: 'Inter', sans-serif;
   --font-heading: 'Outfit', sans-serif;
 }
@@ -98,7 +99,7 @@ h1 {
 .scanner-container {
   width: 100%;
   aspect-ratio: 4/3;
-  background: #EEF2F7;
+  background: #F8FAFC;
   border-radius: 12px;
   margin-bottom: 1.5rem;
   overflow: hidden;
@@ -136,7 +137,14 @@ h1 {
 #image-preview {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  object-fit: contain;
+  background: #000;
+  display: block;
+}
+
+.scanner-container.has-image {
+  border-style: solid;
+  border-color: var(--primary);
 }
 
 /* Controls */
@@ -438,6 +446,13 @@ button {
   text-align: center;
 }
 
+#pre-footer-msg {
+  display: block !important;
+  visibility: visible !important;
+  margin-top: 1rem;
+  font-weight: bold;
+}
+
 .token-title {
   margin-bottom: 0.5rem;
 }
@@ -474,4 +489,39 @@ button {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+/* Mode Switch */
+.mode-switch-container {
+  display: flex;
+  background: var(--surface);
+  border: 1px solid #CBD5E1; 
+  border-radius: 99px;
+  padding: 4px;
+  margin: 1rem 0;
+  width: fit-content;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.mode-btn {
+  background: transparent;
+  border: none;
+  padding: 0.5rem 1.5rem;
+  border-radius: 99px;
+  font-family: inherit;
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.mode-btn.active {
+  background: var(--primary);
+  color: white;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.receipt-item.hidden {
+  display: none !important;
 }

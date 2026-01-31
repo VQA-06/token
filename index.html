@@ -38,48 +38,16 @@
       </div>
     </div>
 
-    <div id="preview-modal" class="modal hidden">
-      <div class="modal-content receipt-card scale-in">
-        <div class="preview-header">
-          <h3>Preview Struk</h3>
-          <button id="close-preview" class="btn-icon">✕</button>
-        </div>
-        <div class="thermal-preview" id="thermal-preview-content">
-          <!-- Content injected via JS -->
-          <div class="thermal-header">
-            <div id="pre-store">** SA CELL **</div>
-            <div id="pre-datetime">2025-12-27 13:00:00</div>
-          </div>
-          <div class="thermal-title">STRUK PEMBELIAN LISTRIK<br>PRABAYAR</div>
-          <div class="thermal-body">
-            <div class="row"><span>IDPEL</span><span>:</span><span id="pre-idpel">000000000000</span></div>
-            <div class="row"><span>NAMA</span><span>:</span><span id="pre-nama">-</span></div>
-            <div class="row"><span>TRF/DAYA</span><span>:</span><span id="pre-tarif">-</span></div>
-            <div class="row"><span>NOMINAL</span><span>:</span><span id="pre-nominal">RP. 0,00</span></div>
-            <div class="row"><span>PPN</span><span>:</span><span id="pre-ppn">RP. 0,00</span></div>
-            <div class="row"><span>ANGS/MAT</span><span>:</span><span id="pre-angsmat">RP. 0,00/0,00</span></div>
-            <div class="row"><span>RP TOKEN</span><span>:</span><span id="pre-rptoken">RP. 0,00</span></div>
-            <div class="row"><span>JML KWH</span><span>:</span><span id="pre-kwh">0.0</span></div>
-            <div class="row"><span>BIAYA ADM</span><span>:</span><span id="pre-admin">RP. 0,00</span></div>
-            <div class="row highlighted"><span>TOTAL BAYAR</span><span>:</span><span id="pre-total">RP. 0,00</span></div>
-          </div>
-          <div class="thermal-footer">
-            <div class="token-title">-- TOKEN --</div>
-            <div id="pre-token" class="token-value-large">0000-0000-0000<br>0000-0000</div>
-            <div class="info-footer">Info Hubungi Call Center 123<br>Atau Hubungi PLN Terdekat</div>
-          </div>
-        </div>
-        <button id="confirm-print-btn" class="btn-primary full-width">
-          <span class="icon">🖨️</span> Cetak Sekarang
-        </button>
-      </div>
-    </div>
+
 
     <main>
       <section id="scanner-section" class="card fade-in">
         <div class="card-content">
-          <h1>Scan Struk Token</h1>
-          <p class="subtitle">Arahkan kamera ke struk pembelian atau upload foto</p>
+          <h1>Scan Struk</h1>
+          <div class="mode-switch-container">
+            <button id="mode-token" class="mode-btn active">Token PLN</button>
+            <button id="mode-payment" class="mode-btn">Pembayaran</button>
+          </div>
           
           <div class="scanner-container">
             <div id="scanner-overlay" class="hidden">
@@ -119,15 +87,38 @@
               <label>Nomor Token</label>
               <div class="token-display" id="res-token">XXXX-XXXX-XXXX-XXXX-XXXX</div>
             </div>
-            <div class="receipt-grid">
+              <div class="receipt-grid">
               <div class="receipt-item">
                 <label>ID Pelanggan</label>
                 <div class="value" id="res-idpel">-</div>
               </div>
+              
               <div class="receipt-item">
                 <label>Nama</label>
                 <div class="value" id="res-nama">-</div>
               </div>
+
+              <div class="receipt-item hidden" id="item-periode">
+                <label>Periode</label>
+                <div class="value" id="res-periode">-</div>
+              </div>
+
+              <div class="receipt-item hidden" id="item-lokasi">
+                <label>Lokasi</label>
+                <div class="value" id="res-lokasi">-</div>
+              </div>
+
+              <div class="receipt-item hidden" id="item-nopesanan">
+                <label>No Pesanan</label>
+                <div class="value" id="res-nopesanan">-</div>
+              </div>
+
+              <div class="receipt-item">
+                <label>Nominal</label>
+                <div class="value" id="res-nominal">-</div>
+              </div>
+
+              <!-- Token Specific Fields -->
               <div class="receipt-item">
                 <label>Tarif/Daya</label>
                 <div class="value" id="res-tarif">-</div>
@@ -137,10 +128,6 @@
                 <div class="value" id="res-kwh">-</div>
               </div>
               <div class="receipt-item">
-                <label>Nominal</label>
-                <div class="value" id="res-nominal">-</div>
-              </div>
-              <div class="receipt-item">
                 <label>PPN</label>
                 <div class="value" id="res-ppn">-</div>
               </div>
@@ -148,6 +135,8 @@
                 <label>ANGS/MAT</label>
                 <div class="value" id="res-angsmat">-</div>
               </div>
+
+              <!-- Admin & Total -->
               <div class="receipt-item">
                 <label>Admin</label>
                 <div class="admin-selector-compact">

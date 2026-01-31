@@ -1,9 +1,17 @@
 import { processReceipt, processPdf, preprocessImage } from './ocr';
 import { printViaRawBT } from './rawbt';
-import { registerSW } from 'virtual:pwa-register';
+// import { registerSW } from 'virtual:pwa-register';
 
 // State
 let currentReceiptData = null;
+let appMode = 'token'; // 'token' or 'payment'
+
+// DEBUG: Global Error Handler
+window.onerror = function(msg, url, line) {
+  alert("System Error:\n" + msg + "\nLine: " + line);
+  console.error("Global Error:", msg, url, line);
+};
+console.log("Main.js loaded");
 
 // DOM Elements
 const scannerSection = document.getElementById('scanner-section');
@@ -15,8 +23,12 @@ const ocrStatus = document.getElementById('ocr-status');
 const statusText = document.getElementById('status-text');
 const installBtn = document.getElementById('install-btn');
 
+// Mode Switch Elements
+const modeToken = document.getElementById('mode-token');
+const modePayment = document.getElementById('mode-payment');
+
 // Result Elements
-const resToken = document.getElementById('res-token');
+const resToken = document.getElementById('res-token'); 
 const resIdpel = document.getElementById('res-idpel');
 const resNama = document.getElementById('res-nama');
 const resTarif = document.getElementById('res-tarif');
@@ -27,6 +39,13 @@ const resAngsmat = document.getElementById('res-angsmat');
 const resTotal = document.getElementById('res-total');
 const adminSelect = document.getElementById('res-admin-select');
 
+// New Payment Result Elements
+const itemLokasi = document.getElementById('item-lokasi');
+const resLokasi = document.getElementById('res-lokasi');
+const itemPeriode = document.getElementById('item-periode');
+const resPeriode = document.getElementById('res-periode');
+const itemNoPesanan = document.getElementById('item-nopesanan');
+
 // Buttons
 const uploadBtn = document.getElementById('upload-btn');
 const printBtn = document.getElementById('print-btn');
@@ -36,35 +55,41 @@ const saveSettingsBtn = document.getElementById('save-settings');
 const settingsModal = document.getElementById('settings-modal');
 const storeNameInput = document.getElementById('store-name-input');
 
-// Preview Elements
-const previewModal = document.getElementById('preview-modal');
-const closePreviewBtn = document.getElementById('close-preview');
-const confirmPrintBtn = document.getElementById('confirm-print-btn');
-const preStore = document.getElementById('pre-store');
-const preDatetime = document.getElementById('pre-datetime');
-const preIdpel = document.getElementById('pre-idpel');
-const preNama = document.getElementById('pre-nama');
-const preTarif = document.getElementById('pre-tarif');
-const preNominal = document.getElementById('pre-nominal');
-const prePpn = document.getElementById('pre-ppn');
-const preAngsmat = document.getElementById('pre-angsmat');
-const preRptoken = document.getElementById('pre-rptoken');
-const preKwh = document.getElementById('pre-kwh');
-const preAdmin = document.getElementById('pre-admin');
-const preTotal = document.getElementById('pre-total');
-const preToken = document.getElementById('pre-token');
+
 
 /**
  * PWA Registration
  */
-const updateSW = registerSW({
-  onNeedRefresh() {
-    showToast('Aplikasi tersedia versi baru. Muat ulang?', 5000);
-  },
-  onOfflineReady() {
-    showToast('Aplikasi siap digunakan secara offline');
-  },
-});
+// const updateSW = registerSW({
+//   onNeedRefresh() {
+//     showToast('Aplikasi tersedia versi baru. Muat ulang?', 5000);
+//   },
+//   onOfflineReady() {
+//     showToast('Aplikasi siap digunakan secara offline');
+//   },
+// });
+
+/**
+ * Mode Switching
+ */
+function setMode(mode) {
+  appMode = mode;
+  console.log("Mode Switch Clicked:", mode);
+  
+  // UI Updates
+  if (mode === 'token') {
+    modeToken.classList.add('active');
+    modePayment.classList.remove('active');
+    // scanSubtitle.textContent = 'Scan Struk Token PLN';
+  } else {
+    modePayment.classList.add('active');
+    modeToken.classList.remove('active');
+    // scanSubtitle.textContent = 'Scan Struk Pembayaran (PDAM)';
+  }
+}
+
+modeToken.addEventListener('click', () => setMode('token'));
+modePayment.addEventListener('click', () => setMode('payment'));
 
 /**
  * UI State Management
@@ -75,67 +100,74 @@ function showScanner() {
   ocrStatus.classList.add('hidden');
   imagePreview.classList.add('hidden');
   dropZone.classList.remove('hidden');
+  document.querySelector('.scanner-container').classList.remove('has-image');
 }
 
 function showResult(data) {
   const customAdmin = parseInt(localStorage.getItem('customAdmin') || '3000');
   
-  // OCR sometimes detects Admin if it's there
-  const ocrAdmin = parseInt(data.admin || '0');
+  const baseAmount = parseInt(appMode === 'token' ? (data.nominal || '0') : (data.tagihan || '0'));
   
-  // If OCR detected 0 admin (like in shopee receipt), we use customAdmin
-  // If user wants to override, they can.
+  let ocrAdmin = parseInt(data.admin || '0');
+  if (isNaN(ocrAdmin)) ocrAdmin = 0;
+
   data.admin = customAdmin;
-  data.total = (parseInt(data.nominal || '0')) + data.admin;
+  data.total = baseAmount + data.admin;
 
   currentReceiptData = data;
-  resToken.textContent = formatToken(data.token);
+
   resIdpel.textContent = data.idpel || '-';
   resNama.textContent = data.nama || '-';
-  resTarif.textContent = data.tarif || '-';
-  resKwh.textContent = formatKwh(data.kwh) || '-';
-  resNominal.textContent = `Rp${formatRp(data.nominal)}`;
-  resPpn.textContent = `Rp${formatRpDecimal(data.ppn)}`;
-  resAngsmat.textContent = `Rp${data.angsmat}`;
-  resTotal.textContent = `Rp${formatRp(data.total)}`;
+  
+  if (appMode === 'token') {
+    toggleElement(resToken.parentElement, true);
+    toggleElement(resTarif.parentElement, true);
+    toggleElement(resKwh.parentElement, true);
+    toggleElement(resPpn.parentElement, true);
+    toggleElement(resAngsmat.parentElement, true);
+    
+    toggleElement(itemLokasi, false);
+    toggleElement(itemPeriode, false);
+    toggleElement(itemNoPesanan, false);
+    
+    resToken.textContent = formatToken(data.token);
+    resTarif.textContent = data.tarif || '-';
+    resKwh.textContent = formatKwh(data.kwh) || '-';
+    resNominal.previousElementSibling.textContent = 'Nominal';
+    resNominal.textContent = `Rp${formatRp(data.nominal)}`;
+    resPpn.textContent = `Rp${formatRpDecimal(data.ppn)}`;
+    resAngsmat.textContent = `Rp${data.angsmat}`;
 
-  // Update active admin select
+  } else {
+    toggleElement(resToken.parentElement, false);
+    toggleElement(resTarif.parentElement, false);
+    toggleElement(resKwh.parentElement, false);
+    toggleElement(resPpn.parentElement, false);
+    toggleElement(resAngsmat.parentElement, false);
+    
+    toggleElement(itemLokasi, true);
+    toggleElement(itemPeriode, true);
+    toggleElement(itemNoPesanan, !!data.noPesanan);
+
+    resLokasi.textContent = data.lokasi || '-';
+    resPeriode.textContent = data.periode || '-';
+    const noPesananEl = document.getElementById('res-nopesanan');
+    if (noPesananEl) noPesananEl.textContent = data.noPesanan || '-';
+    resNominal.previousElementSibling.textContent = 'Tagihan';
+    resNominal.textContent = `Rp${formatRp(data.tagihan)}`;
+  }
+
+  resTotal.textContent = `Rp${formatRp(data.total)}`;
   adminSelect.value = data.admin.toString();
 
   scannerSection.classList.add('hidden');
   resultSection.classList.remove('hidden');
 }
 
-function updatePreview() {
-  const storeName = localStorage.getItem('storeName') || 'SA CELL';
-  const now = new Date();
-  const dateStr = now.toLocaleDateString('id-ID') + ' ' + now.toLocaleTimeString('id-id', { hour12: false }).replace(/\./g, ':');
-  
-  preStore.textContent = `** ${storeName.toUpperCase()} **`;
-  preDatetime.textContent = dateStr;
-  preIdpel.textContent = currentReceiptData.idpel;
-  preNama.textContent = currentReceiptData.nama;
-  preTarif.textContent = currentReceiptData.tarif;
-  preNominal.textContent = `RP. ${formatRp(currentReceiptData.nominal)}`;
-  prePpn.textContent = `RP. ${formatRpDecimal(currentReceiptData.ppn)}`;
-  preAngsmat.textContent = `RP. 0,00/0,00`;
-  preRptoken.textContent = `RP. ${formatRp(currentReceiptData.nominal)}`;
-  preKwh.textContent = formatKwh(currentReceiptData.kwh);
-  preAdmin.textContent = `RP. ${formatRp(currentReceiptData.admin)}`;
-  preTotal.textContent = `RP. ${formatRp(currentReceiptData.total)}`;
-  
-  // Format token 2 lines
-  const token = currentReceiptData.token;
-  if (token && token.length === 20) {
-    preToken.innerHTML = `${token.substring(0, 4)}-${token.substring(4, 8)}-${token.substring(8, 12)}<br>${token.substring(12, 16)}-${token.substring(16, 20)}`;
-  } else {
-    preToken.textContent = '---- ---- ---- ---- ----';
-  }
-}
 
 function formatRp(num) {
-  if (!num) return '0,00';
-  return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".") + ',00';
+  if (!num) return '0';
+  return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
 }
 
 function formatRpDecimal(val) {
@@ -148,18 +180,12 @@ function formatRpDecimal(val) {
 
 function formatKwh(val) {
   if (!val) return '0,0';
-  // Clean value (only digits and decimal markers)
-  let clean = val.replace(/[^0-9,.]/g, '').replace(',', '.');
+  let clean = val.toString().replace(/[^0-9,.]/g, '').replace(',', '.');
   let num = parseFloat(clean);
   if (isNaN(num)) return val;
-  
-  // If no decimal places and high value, assume OCR missed the comma (e.g. 3530 -> 35.30)
-  // This is a heuristic for Shopee receipts where 35,30 might be read as 3530
   if (!clean.includes('.') && num > 1000) {
     num = num / 100;
   }
-  
-  // Return with 1 decimal place and DOT separator + KWH suffix
   return num.toFixed(1) + 'KWH';
 }
 
@@ -168,9 +194,6 @@ function formatToken(token) {
   return token.replace(/(\d{4})/g, '$1 ').trim();
 }
 
-/**
- * Image Processing Flow
- */
 async function processImage(source, isPdf = false) {
   ocrStatus.classList.remove('hidden');
   statusText.textContent = 'Memproses ' + (isPdf ? 'PDF' : 'OCR') + '...';
@@ -178,22 +201,27 @@ async function processImage(source, isPdf = false) {
   try {
     let data;
     if (isPdf) {
-      // PDF preview is handled differently or we can use a placeholder
       imagePreview.classList.add('hidden');
+      dropZone.classList.remove('hidden'); // Keep icon for PDF
       data = await processPdf(source);
     } else {
-      // Show preview
       imagePreview.src = source;
       imagePreview.classList.remove('hidden');
-      data = await processReceipt(source);
+      dropZone.classList.add('hidden');
+      document.querySelector('.scanner-container').classList.add('has-image');
+      data = await processReceipt(source, appMode);
     }
-    
-    dropZone.classList.add('hidden');
 
-    if (!data.token) {
+    if (appMode === 'token' && !data.token) {
       statusText.textContent = 'Token tidak ditemukan. Coba lagi.';
       setTimeout(() => ocrStatus.classList.add('hidden'), 3000);
       return;
+    }
+
+    if (appMode === 'payment' && !data.tagihan && !data.total) {
+        statusText.textContent = 'Bukan struk pembayaran yang dikenali. Coba lagi.';
+        setTimeout(() => ocrStatus.classList.add('hidden'), 3000);
+        return;
     }
 
     showResult(data);
@@ -223,12 +251,11 @@ adminSelect.addEventListener('change', () => {
   if (!currentReceiptData) return;
   const value = parseInt(adminSelect.value);
   currentReceiptData.admin = value;
-  currentReceiptData.total = (parseInt(currentReceiptData.nominal || '0')) + value;
   
-  // Update UI
+  const baseAmount = parseInt(appMode === 'token' ? (currentReceiptData.nominal || '0') : (currentReceiptData.tagihan || '0'));
+  currentReceiptData.total = baseAmount + value;
+  
   resTotal.textContent = `Rp${formatRp(currentReceiptData.total)}`;
-  
-  // Save as default
   localStorage.setItem('customAdmin', value);
 });
 
@@ -236,20 +263,17 @@ dropZone.addEventListener('click', () => fileInput.click());
 
 printBtn.addEventListener('click', async () => {
   if (!currentReceiptData) return;
-  
-  // Visual feedback
+
   const originalText = printBtn.innerHTML;
   printBtn.disabled = true;
-  printBtn.innerHTML = '<div class="spinner"></div> Mengirim ke RawBT...';
+  printBtn.innerHTML = '<div class="spinner"></div> Mencetak...';
 
   try {
     const storeName = localStorage.getItem('storeName') || 'SA CELL';
-    // Use RawBT Service
-    await printViaRawBT({ ...currentReceiptData, storeName });
+    await printViaRawBT({ ...currentReceiptData, storeName, mode: appMode });
     showToast('Berhasil dikirim ke RawBT!');
   } catch (err) {
     showToast(err.message); 
-    // Show specific advice if error mentions RawBT
     if (err.message.includes('RawBT')) {
         showToast('Pastikan RawBT aktif & "Server Pencetakan" ON', 5000);
     }
@@ -259,16 +283,8 @@ printBtn.addEventListener('click', async () => {
   }
 });
 
-// Confirm print listener removed as preview is bypassed
-// confirmPrintBtn.addEventListener('click', async () => { ... });
-
-closePreviewBtn.addEventListener('click', () => {
-  previewModal.classList.add('hidden');
-});
-
 resetBtn.addEventListener('click', showScanner);
 
-// Settings Modal
 settingsBtn.addEventListener('click', () => {
   storeNameInput.value = localStorage.getItem('storeName') || 'SA CELL';
   settingsModal.classList.remove('hidden');
@@ -278,40 +294,48 @@ saveSettingsBtn.addEventListener('click', () => {
   localStorage.setItem('storeName', storeNameInput.value);
   settingsModal.classList.add('hidden');
   if (currentReceiptData) {
-    showResult(currentReceiptData); // Recalculate if result is showing
+    showResult(currentReceiptData);
   }
 });
 
 window.addEventListener('click', (e) => {
   if (e.target === settingsModal) settingsModal.classList.add('hidden');
-  if (e.target === previewModal) previewModal.classList.add('hidden');
 });
 
-/**
- * Utilities
- */
-function showToast(message, duration = 3000) {
-  const toast = document.getElementById('toast');
-  toast.textContent = message;
-  toast.classList.remove('hidden');
-  setTimeout(() => toast.classList.add('hidden'), duration);
+function toggleElement(element, visible) {
+  if (!element) return;
+  if (visible) {
+    element.classList.remove('hidden');
+  } else {
+    element.classList.add('hidden');
+  }
 }
 
-// PWA Install Prompt
+function showToast(message, duration = 3000) {
+  const toast = document.getElementById('toast');
+  if (toast) {
+    toast.textContent = message;
+    toast.classList.remove('hidden');
+    setTimeout(() => toast.classList.add('hidden'), duration);
+  }
+}
+
 let deferredPrompt;
 window.addEventListener('beforeinstallprompt', (e) => {
   e.preventDefault();
   deferredPrompt = e;
-  installBtn.classList.remove('hidden');
+  if (installBtn) installBtn.classList.remove('hidden');
 });
 
-installBtn.addEventListener('click', async () => {
-  if (deferredPrompt) {
-    deferredPrompt.prompt();
-    const { outcome } = await deferredPrompt.userChoice;
-    if (outcome === 'accepted') {
-      installBtn.classList.add('hidden');
+if (installBtn) {
+  installBtn.addEventListener('click', async () => {
+    if (deferredPrompt) {
+      deferredPrompt.prompt();
+      const { outcome } = await deferredPrompt.userChoice;
+      if (outcome === 'accepted') {
+        installBtn.classList.add('hidden');
+      }
+      deferredPrompt = null;
     }
-    deferredPrompt = null;
-  }
-});
+  });
+}

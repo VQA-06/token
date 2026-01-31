@@ -29,7 +29,9 @@ function generateEscPosCommands(data) {
   const GS = 0x1D;
   const LF = 0x0A;
   
-  const commands = [
+  const isPayment = data.mode === 'payment';
+
+  let commands = [
     // Initialize
     ESC, 0x40,
     
@@ -37,47 +39,82 @@ function generateEscPosCommands(data) {
     ESC, 0x61, 0x01, // Center
     ...encoder.encode(`** ${data.storeName.toUpperCase()} **\n`),
     ...encoder.encode(`${dateStr} (CU)\n`),
-    LF,
-    ...encoder.encode('STRUK PEMBELIAN LISTRIK\n'),
-    ...encoder.encode('PRABAYAR\n'),
-    LF,
-    
-    ESC, 0x61, 0x00, // Left
-    ...encoder.encode(formatRow('IDPEL', `: ${data.idpel}`)),
-    ...encoder.encode(formatRow('NAMA', `: ${data.nama}`)),
-    ...encoder.encode(formatRow('TRF/DAYA', `: ${data.tarif}`)),
-    ...encoder.encode(formatRow('NOMINAL', `: RP. ${formatNumber(data.nominal)}`)),
-    ...encoder.encode(formatRow('PPN', `: RP. ${formatNumberDecimal(data.ppn)}`)),
-    ...encoder.encode(formatRow('ANGS/MAT', `: RP. 0,00/0,00`)),
-    ...encoder.encode(formatRow('RP TOKEN', `: RP. ${formatNumber(data.nominal)}`)),
-    ...encoder.encode(formatRow('JML KWH', `: ${formatKwh(data.kwh)}`)),
-    ...encoder.encode(formatRow('BIAYA ADM', `: RP. ${formatNumber(data.admin)}`)),
-    ESC, 0x45, 0x01, // Bold On
-    ...encoder.encode(formatRow('TOTAL BAYAR', `: RP. ${formatNumber(data.total)}`)),
-    ESC, 0x45, 0x00, // Bold Off
-    LF,
-    
-    ESC, 0x61, 0x01, // Center
-    ...encoder.encode('-- TOKEN --\n'),
-    ESC, 0x45, 0x01, // Bold On
-    GS, 0x21, 0x11, // Double height & width
-    ...encoder.encode(splitToken(data.token)),
-    GS, 0x21, 0x00, // Normal size
-    ESC, 0x45, 0x00, // Bold Off
-    LF,
-    
-    ESC, 0x61, 0x01, // Center
-    ...encoder.encode('Info Hubungi Call Center 123\n'),
-    ...encoder.encode('Atau Hubungi PLN Terdekat\n'),
-    LF, LF, LF, LF // Feed
+    LF
   ];
+
+  if (isPayment) {
+    // === PAYMENT MODE ===
+    commands.push(
+      ...encoder.encode('STRUK PEMBAYARAN\n'),
+      ...encoder.encode('TAGIHAN\n'),
+      LF,
+      
+      ESC, 0x61, 0x00, // Left
+      ...encoder.encode(formatRow('IDPEL', `: ${data.idpel || '-'}`)),
+      ...encoder.encode(formatRow('NAMA', `: ${data.nama || '-'}`)),
+      ...encoder.encode(formatRow('JENIS TAGIHAN', `: PDAM`)),
+      ...encoder.encode(formatRow('LOKASI', `: ${(data.lokasi || '-').replace(/\. /g, '.')}`)), 
+      ...encoder.encode(formatRow('PERIODE', `: ${data.periode || '-'}`)), 
+      ...encoder.encode(formatRow('TAGIHAN', `: RP.${formatNumber(data.tagihan)}`)),
+      ...encoder.encode(formatRow('NO. PESANAN', `: ${data.noPesanan || '-'}`)),
+      ...encoder.encode(formatRow('BIAYA ADM', `: RP.${formatNumber(data.admin)}`)),
+      
+      ESC, 0x45, 0x01, // Bold On
+      ...encoder.encode(formatRow('TOTAL BAYAR', `: RP.${formatNumber(data.total)}`)),
+      ESC, 0x45, 0x00, // Bold Off
+      LF, LF,
+      
+      ESC, 0x61, 0x01, // Center
+      ...encoder.encode('Simpan Struk Ini\n'),
+      ...encoder.encode('Sebagai Bukti Pembayaran Yang Sah\n'),
+      LF,
+      ...encoder.encode('-- Terima Kasih --\n'),
+      LF
+    );
+  } else {
+    // === TOKEN MODE ===
+    commands.push(
+      ...encoder.encode('STRUK PEMBELIAN LISTRIK\n'),
+      ...encoder.encode('PRABAYAR\n'),
+      LF,
+      
+      ESC, 0x61, 0x00, // Left
+      ...encoder.encode(formatRow('IDPEL', `: ${data.idpel}`)),
+      ...encoder.encode(formatRow('NAMA', `: ${data.nama}`)),
+      ...encoder.encode(formatRow('TRF/DAYA', `: ${data.tarif}`)),
+      ...encoder.encode(formatRow('NOMINAL', `: RP. ${formatNumber(data.nominal)}`)),
+      ...encoder.encode(formatRow('PPN', `: RP. ${formatNumberDecimal(data.ppn)}`)),
+      ...encoder.encode(formatRow('ANGS/MAT', `: RP. 0,00/0,00`)),
+      ...encoder.encode(formatRow('RP TOKEN', `: RP. ${formatNumber(data.nominal)}`)),
+      ...encoder.encode(formatRow('JML KWH', `: ${formatKwh(data.kwh)}`)),
+      ...encoder.encode(formatRow('BIAYA ADM', `: RP. ${formatNumber(data.admin)}`)),
+      ESC, 0x45, 0x01, // Bold On
+      ...encoder.encode(formatRow('TOTAL BAYAR', `: RP. ${formatNumber(data.total)}`)),
+      ESC, 0x45, 0x00, // Bold Off
+      LF, LF,
+      
+      ESC, 0x61, 0x01, // Center
+      ...encoder.encode('-- TOKEN --\n'),
+      ESC, 0x45, 0x01, // Bold On
+      GS, 0x21, 0x11, // Double height & width
+      ...encoder.encode(splitToken(data.token)),
+      GS, 0x21, 0x00, // Normal size
+      ESC, 0x45, 0x00, // Bold Off
+      LF,
+      
+      ESC, 0x61, 0x01, // Center
+      ...encoder.encode('Info Hubungi Call Center 123\n'),
+      ...encoder.encode('Atau Hubungi PLN Terdekat\n'),
+      LF
+    );
+  }
 
   return new Uint8Array(commands); 
 }
 
 // Helpers
 function formatRow(label, value) {
-  const labelWidth = 10; 
+  const labelWidth = 14; 
   const padding = ' '.repeat(Math.max(0, labelWidth - label.length));
   return `   ${label}${padding}${value}\n`;
 }
@@ -90,8 +127,8 @@ function splitToken(token) {
 }
 
 function formatNumber(num) {
-  if (!num) return '0,00';
-  return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".") + ',00';
+  if (!num) return '0';
+  return num.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ".");
 }
 
 function formatNumberDecimal(val) {
