@@ -1,5 +1,5 @@
 import { createWorker } from 'tesseract.js';
-import { parseWithGemini } from './gemini.js';
+import { parseWithGemini, parseWithGeminiVision } from './gemini.js';
 
 // PDF.js is loaded via CDN in index.html to avoid bundling issues
 // The library exposes 'pdfjsLib' to window
@@ -15,36 +15,38 @@ if (pdfjsLib) {
  * @param {string|Blob|File} imageSource 
  */
 export async function processReceipt(imageSource, mode = 'token') {
-  const worker = await createWorker('ind'); // Using Indonesian language
+  console.log('Using Gemini Vision for high-accuracy parsing...');
   
   try {
+    // 1. Direct Vision Parsing (High Accuracy)
+    const visionResult = await parseWithGeminiVision(imageSource);
+    
+    if (visionResult && (visionResult.token || visionResult.tagihan)) {
+        console.log('Gemini Vision Success:', visionResult);
+        return visionResult;
+    }
+
+    // 2. Fallback to Tesseract + Gemini Text if Vision fails
+    console.warn('Gemini Vision failed or returned incomplete data. Falling back to Tesseract...');
+    const worker = await createWorker('ind');
     const { data: { text } } = await worker.recognize(imageSource);
     await worker.terminate();
     
     console.log('Raw OCR Text:', text);
     
     if (mode === 'payment') {
-        console.log('Mode: Payment. Using Regex Parser.');
         return parsePaymentText(text);
     }
     
-    // Full AI Parsing Mode - Gemini handles everything
-    console.log('Using Gemini AI for parsing...');
     const aiResult = await parseWithGemini(text);
-    
     if (aiResult) {
-        console.log('AI Parsing Success:', aiResult);
-        // Ensure raw text is preserved
         aiResult.raw = text;
         return aiResult;
     } else {
-        // Fallback to regex only if AI completely fails
-        console.warn('AI parsing failed. Using regex fallback...');
         return parsePLNText(text);
     }
   } catch (error) {
-    console.error('OCR Error:', error);
-    await worker.terminate();
+    console.error('Extraction Error:', error);
     throw error;
   }
 }
@@ -70,7 +72,9 @@ function parsePLNText(text) {
   };
 
   // 1. Extract Token (20 digits)
-  const tokenMatch = text.match(/Stroom\/Nomor Token\s*(\d{4}\s?\d{4}\s?\d{4}\s?\d{4}\s?\d{4})/i) ||
+  // Improved: Support direct text with label boundaries and messy OCR spaces
+  const tokenMatch = text.match(/Stroom\/Nomor Token\s*([\d\s]{20,25})(?=\s*(?:Nomor Meter|Nomor Pelanggan|Nama|$))/i) ||
+                     text.match(/Stroom\/Nomor Token\s*(\d{4}\s?\d{4}\s?\d{4}\s?\d{4}\s?\d{4})/i) ||
                      text.match(/TOKEN\s*[:]\s*(\d{4}\s?\d{4}\s?\d{4}\s?\d{4}\s?\d{4})/i) ||
                      text.match(/(\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4})/);
   if (tokenMatch) {
@@ -404,6 +408,19 @@ function parsePaymentText(text) {
   return result;
 }
 
+// Helper to extract text from PDF items
+async function extractPdfText(page) {
+  try {
+    const textContent = await page.getTextContent();
+    const strings = textContent.items.map(item => item.str);
+    // Join with space, but preserve some formatting hints if possible
+    return strings.join(' ').replace(/\s+/g, ' ');
+  } catch (err) {
+    console.error('Text extraction failed:', err);
+    return null;
+  }
+}
+
 /**
  * Process PDF file and return extracted data
  */
@@ -413,9 +430,26 @@ export async function processPdf(pdfDataUrl) {
   }
   const loadingTask = pdfjsLib.getDocument(pdfDataUrl);
   const pdf = await loadingTask.promise;
-  const page = await pdf.getPage(1); // Process first page
+  const page = await pdf.getPage(1);
   
-  const viewport = page.getViewport({ scale: 3.0 }); // Increased scale for better OCR on mobile browsers
+  // 1. Try Direct Text Extraction (Digital PDF) - HIGH ACCURACY
+  console.log('Mencoba ekstraksi teks langsung dari PDF...');
+  const directText = await extractPdfText(page);
+  
+  if (directText && directText.length > 20) {
+    console.log('Digital PDF detected. Parsing direct text...');
+    const data = parsePLNText(directText);
+    
+    // Validate if token found
+    if (data.token && data.token.length >= 20) {
+      console.log('Direct extraction success:', data);
+      return data;
+    }
+    console.log('Data penting tidak ditemukan di teks digital, lanjut ke mode visual...');
+  }
+  
+  // 2. Fallback: Render to canvas for Vision/OCR
+  const viewport = page.getViewport({ scale: 3.0 });
   const canvas = document.createElement('canvas');
   const context = canvas.getContext('2d');
   canvas.height = viewport.height;
