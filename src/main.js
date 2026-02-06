@@ -151,7 +151,7 @@ function showResult(data) {
     
     toggleElement(itemLokasi, false);
     toggleElement(itemPeriode, !isToken);
-    toggleElement(itemNoPesanan, true);
+    toggleElement(itemNoPesanan, !isToken);
     toggleElement(itemStand, !isToken);
     toggleElement(itemDenda, !isToken);
     
