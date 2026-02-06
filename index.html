@@ -45,8 +45,17 @@
         <div class="card-content">
           <h1>Scan Struk</h1>
           <div class="mode-switch-container">
-            <button id="mode-token" class="mode-btn active">Token PLN</button>
-            <button id="mode-payment" class="mode-btn">Pembayaran</button>
+            <div class="dropdown">
+              <button id="mode-pln-dropdown" class="mode-btn active">
+                <span id="pln-label">Token PLN</span>
+                <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+              </button>
+              <div id="pln-menu" class="dropdown-menu hidden">
+                <button class="dropdown-item" data-mode="token">Token PLN</button>
+                <button class="dropdown-item" data-mode="tagihan-pln">Tagihan Listrik</button>
+              </div>
+            </div>
+            <button id="mode-payment" class="mode-btn">PDAM/Lainnya</button>
           </div>
           
           <div class="scanner-container">
@@ -134,6 +143,15 @@
               <div class="receipt-item">
                 <label>ANGS/MAT</label>
                 <div class="value" id="res-angsmat">-</div>
+              </div>
+              
+              <div class="receipt-item hidden" id="item-stand">
+                <label>Stand Meter</label>
+                <div class="value" id="res-stand">-</div>
+              </div>
+              <div class="receipt-item hidden" id="item-denda">
+                <label>Denda</label>
+                <div class="value" id="res-denda">-</div>
               </div>
 
               <!-- Admin & Total -->

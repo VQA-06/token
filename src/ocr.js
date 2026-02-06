@@ -13,38 +13,46 @@ if (pdfjsLib) {
 /**
  * Perform OCR on an image and extract PLN receipt data
  * @param {string|Blob|File} imageSource 
+ * @param {string} mode - 'token', 'tagihan-pln', or 'payment'
+ * @param {boolean} useAI - Whether to use Gemini AI for parsing (disabled for PDFs)
  */
-export async function processReceipt(imageSource, mode = 'token') {
-  console.log('Using Gemini Vision for high-accuracy parsing...');
-  
+export async function processReceipt(imageSource, mode = 'token', useAI = true) {
   try {
-    // 1. Direct Vision Parsing (High Accuracy)
-    const visionResult = await parseWithGeminiVision(imageSource);
-    
-    if (visionResult && (visionResult.token || visionResult.tagihan)) {
-        console.log('Gemini Vision Success:', visionResult);
-        return visionResult;
+    // 1. Direct Vision Parsing (High Accuracy) - ONLY FOR IMAGES
+    if (useAI) {
+        console.log('Using Gemini Vision for high-accuracy parsing...');
+        const visionResult = await parseWithGeminiVision(imageSource);
+        
+        if (visionResult && (visionResult.token || visionResult.tagihan || visionResult.idpel)) {
+            console.log('Gemini Vision Success:', visionResult);
+            return visionResult;
+        }
     }
 
-    // 2. Fallback to Tesseract + Gemini Text if Vision fails
-    console.warn('Gemini Vision failed or returned incomplete data. Falling back to Tesseract...');
+    // 2. Fallback to Tesseract + Gemini Text if Vision fails or AI is disabled
+    console.log(`Using Tesseract OCR (${useAI ? 'AI Fallback' : 'Standard Mode'})...`);
     const worker = await createWorker('ind');
     const { data: { text } } = await worker.recognize(imageSource);
     await worker.terminate();
     
     console.log('Raw OCR Text:', text);
     
+    // AI Text Fallback (only if AI is permitted)
+    if (useAI) {
+        const aiResult = await parseWithGemini(text);
+        if (aiResult) {
+            aiResult.raw = text;
+            return aiResult;
+        }
+    }
+
+    // Standard Regex Parsers (Always used as final fallback or when AI is disabled)
     if (mode === 'payment') {
         return parsePaymentText(text);
-    }
-    
-    const aiResult = await parseWithGemini(text);
-    if (aiResult) {
-        aiResult.raw = text;
-        return aiResult;
     } else {
         return parsePLNText(text);
     }
+    
   } catch (error) {
     console.error('Extraction Error:', error);
     throw error;
@@ -63,13 +71,22 @@ function parsePLNText(text) {
     tarif: '',
     kwh: '',
     nominal: '',
+    tagihan: '',
     admin: '',
     total: '',
     ppn: '0',
     angsmat: '0,00/0,00',
     noPesanan: '', 
+    stand: '',
+    denda: '0',
     raw: text
   };
+
+  // 0. Extract No Pesanan (Order Number)
+  const noPesananMatch = text.match(/(?:No\.?\s*Pesanan|Nomor\s*Pesanan|Order\s*No)\s*[:]?\s*([A-Z0-9]+)/i);
+  if (noPesananMatch) {
+    result.noPesanan = noPesananMatch[1].trim();
+  }
 
   // 1. Extract Token (20 digits)
   // Improved: Support direct text with label boundaries and messy OCR spaces
@@ -90,8 +107,8 @@ function parsePLNText(text) {
   }
 
   // 3. Extract Nama
-  // Extremely robust: capture any non-newline character until a known label
-  const namaLabelPattern = /Nama\s*[:]?\s*([^\n\r]+?)(?=\s*(?:Tarif\/Daya|Tarif Daya|IDPEL|Nomor|Stroom|Total|No\.\s*Pesanan|No\.\s*Meter|$))/i;
+  // Robust Strategy: Capture EVERYTHING until the next known label
+  const namaLabelPattern = /Nama\s*[:]?\s*([\s\S]+?)(?=\s*(?:Tarif\/Daya|Tarif Daya|IDPEL|Nomor|Stroom|Total|No\.\s*Pesanan|No\.\s*Meter|Bulan|Periode|$))/i;
   const namaMatch = text.match(namaLabelPattern);
   if (namaMatch) {
     result.nama = namaMatch[1].trim();
@@ -129,9 +146,7 @@ function parsePLNText(text) {
     
     result.tarif = clean.trim();
   }
-
   // 5. Extract KWh
-  // Robust: Handle spaced out 'K W H', suffix placement '123,4 kWh', and typo variations
   const kwhMatch = text.match(/(?:Jumlah|Jml|Total)\s*(?:K\s*W\s*H|KWH|KwH)\s*[:.]?\s*([\d,.]+)/i) || 
                    text.match(/([\d,.]+)\s*(?:k\s*w\s*h|kwh)/i);
 
@@ -149,6 +164,15 @@ function parsePLNText(text) {
     } else {
         result.kwh = val;
     }
+  }
+
+  // 5.5 Extract Periode (for Postpaid)
+  // Look for specific patterns like "BULAN/TAHUN" or months
+  const periodeLabelMatch = text.match(/(?:Bulan|Periode)(?:\s*tagihan)?\s*[:]?\s*(\d{2}[/-]\d{4})/i) ||
+                            text.match(/(?:Bulan|Periode)(?:\s*tagihan)?\s*[:]?\s*([A-Za-z]+\s*20\d{2})/i) ||
+                            text.match(/(?:Bulan|Periode)(?:\s*tagihan)?\s*[:]?\s*(\d{4}[/-]\d{2})/i);
+  if (periodeLabelMatch) {
+    result.periode = periodeLabelMatch[1].trim();
   }
 
   // 6. Extract Nominal (Rp Stroom/Token)
@@ -177,11 +201,31 @@ function parsePLNText(text) {
     result.admin = adminMatch[1].trim().replace(/\./g, '').replace(/,/g, '');
   }
 
-  // 8. Extract Total (Total tagihan)
-  const totalMatch = text.match(/Total tagihan\s*Rp?([\d,.]+)/i) ||
-                     text.match(/TOTAL\s*[:]\s*Rp?([\d,.]+)/i);
+  // 8. Extract Total Tagihan & Total Bayar
+  // Robust Strategy: Capture everything after label until next newline or label
+  const tagihanLabelPattern = /(?:Total\s*Tagihan|Tagihan)\s*[:]?\s*Rp?[\s.]*([\d,.]+)/i;
+  const tagihanMatch = text.match(tagihanLabelPattern);
+  if (tagihanMatch) {
+    result.tagihan = tagihanMatch[1].trim().replace(/\./g, '').replace(/,/g, '');
+  }
+
+  const totalLabelPattern = /(?:Total\s*Bayar|Jumlah\s*Bayar|TOTAL)\s*[:]?\s*Rp?[\s.]*([\d,.]+)/i;
+  const totalMatch = text.match(totalLabelPattern);
   if (totalMatch) {
     result.total = totalMatch[1].trim().replace(/\./g, '').replace(/,/g, '');
+  }
+
+  // 8.5 Extract Stand Meter
+  // Prune output before common next labels
+  const standMatch = text.match(/Stand Meter\s*[:]?\s*([A-Z0-9-/ ]+?)(?=\s*(?:Periode|No|Total|Rp|$))/i);
+  if (standMatch) {
+    result.stand = standMatch[1].trim();
+  }
+
+  // 8.6 Extract Denda
+  const dendaMatch = text.match(/Denda\s*Rp?[\s.]*([\d,.]+)/i);
+  if (dendaMatch) {
+    result.denda = dendaMatch[1].trim().replace(/\./g, '').replace(/,/g, '');
   }
 
   // 9. Extract PPN
@@ -261,29 +305,11 @@ function parsePaymentText(text) {
   }
 
   // 2. Extract Nama
-  // Rule: Capture everything on the same line after labeling, allowing special characters.
-  // We use word boundaries to avoid matching "Pelanggan" inside "ID Pelanggan".
-  const namaLabelPattern = /(?:\bNama Pelanggan|\bNama|\bNAMA\b)\s*[:]?\s*([^\n\r]+)/i;
+  // Robust Strategy: Capture EVERYTHING until the next known label
+  const namaLabelPattern = /(?:\bNama Pelanggan|\bNama|\bNAMA\b)\s*[:]?\s*([\s\S]+?)(?=\s*(?:NO\.PEL|NO\. PEL|ID PEL|IDPEL|NO SAMB|NO\.SAMB|PERIODE|ALAMAT|TOTAL|TAGIHAN|Tarif\/Daya|Tarif Daya|$))/i;
   const namaMatch = text.match(namaLabelPattern);
   if (namaMatch) {
-    let rawNama = namaMatch[1].trim();
-    
-    // Safety: If the OCR caught the next field on the same line (e.g. "MARDALENA No. Pel"), 
-    // we prune at known field boundaries
-    const fields = ['NO.PEL', 'NO. PEL', 'ID PEL', 'IDPEL', 'NO SAMB', 'NO.SAMB', 'PERIODE', 'ALAMAT', 'TOTAL', 'TAGIHAN'];
-    let clean = rawNama;
-    for (const f of fields) {
-      const idx = clean.toUpperCase().indexOf(f);
-      if (idx !== -1) {
-        // Only prune if it looks like a separate word (preceded by space)
-        if (idx === 0 || /\s/.test(clean[idx - 1])) {
-          clean = clean.substring(0, idx).trim();
-        }
-      }
-    }
-    
-    // Final check to remove leading noise but preserve internal characters
-    result.nama = clean.replace(/^(?:Pelanggan|Plg|Nama)\s*[:.-]?\s*/i, '').trim();
+    result.nama = namaMatch[1].trim();
   }
 
   // 3. Extract IDPEL / No Sambungan
@@ -364,8 +390,7 @@ function parsePaymentText(text) {
   // Usually labeled "Tagihan", "Jumlah Tagihan", "Total Air"
 
   // 5. Extract Total Tagihan (before admin)
-  // Usually labeled "Tagihan", "Jumlah Tagihan", "Total Air"
-  const tagihanMatch = text.match(/(?:Tagihan|Jml Tagihan|Total Air|Biaya Air)\s*[:]?\s*Rp?[\s.]*([\d,.]+)/i);
+  const tagihanMatch = text.match(/(?:Tagihan|Jml Tagihan|Total Air|Biaya Air|Total Tagihan)\s*[:]?\s*Rp?[\s.]*([\d,.]+)/i);
   if (tagihanMatch) {
     let raw = tagihanMatch[1].trim().replace(/\./g, '').replace(/,/g, '');
     result.tagihan = raw;
@@ -379,7 +404,6 @@ function parsePaymentText(text) {
   }
 
   // 7. Extract Total Bayar
-  // Usually labeled "Total Bayar", "Total"
   const totalMatch = text.match(/(?:Total Bayar|Total)\s*[:]?\s*Rp?[\s.]*([\d,.]+)/i);
   if (totalMatch) {
     let raw = totalMatch[1].trim().replace(/\./g, '').replace(/,/g, '');
@@ -424,7 +448,7 @@ async function extractPdfText(page) {
 /**
  * Process PDF file and return extracted data
  */
-export async function processPdf(pdfDataUrl) {
+export async function processPdf(pdfDataUrl, mode = 'token') {
   if (!pdfjsLib) {
     throw new Error('PDF library belum dimuat. Silakan muat ulang halaman.');
   }
@@ -433,15 +457,21 @@ export async function processPdf(pdfDataUrl) {
   const page = await pdf.getPage(1);
   
   // 1. Try Direct Text Extraction (Digital PDF) - HIGH ACCURACY
-  console.log('Mencoba ekstraksi teks langsung dari PDF...');
+  console.log('Mencoba ekstraksi teks langsung dari PDF mode:', mode);
   const directText = await extractPdfText(page);
   
   if (directText && directText.length > 20) {
     console.log('Digital PDF detected. Parsing direct text...');
-    const data = parsePLNText(directText);
+    const data = (mode === 'payment') ? parsePaymentText(directText) : parsePLNText(directText);
     
-    // Validate if token found
-    if (data.token && data.token.length >= 20) {
+    // Validate if mandatory fields found
+    const hasToken = data.token && data.token.length >= 20;
+    const hasIdpel = data.idpel && data.idpel.length >= 11;
+    const hasTagihan = data.tagihan || data.total;
+    
+    if ((mode === 'token' && hasToken) || 
+        (mode === 'tagihan-pln' && hasIdpel) || 
+        (mode === 'payment' && (hasIdpel || hasTagihan))) {
       console.log('Direct extraction success:', data);
       return data;
     }
@@ -458,7 +488,8 @@ export async function processPdf(pdfDataUrl) {
   await page.render({ canvasContext: context, viewport: viewport }).promise;
   
   const imageData = canvas.toDataURL('image/png');
-  return await processReceipt(imageData);
+  // PDFs should NEVER use AI, even when rendered to images
+  return await processReceipt(imageData, mode, false);
 }
 
 /**

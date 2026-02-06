@@ -27,6 +27,12 @@ const installBtn = document.getElementById('install-btn');
 const modeToken = document.getElementById('mode-token');
 const modePayment = document.getElementById('mode-payment');
 
+// Dropdown Elements
+const plnDropdown = document.getElementById('mode-pln-dropdown');
+const plnMenu = document.getElementById('pln-menu');
+const plnLabel = document.getElementById('pln-label');
+const dropdownItems = document.querySelectorAll('.dropdown-item');
+
 // Result Elements
 const resToken = document.getElementById('res-token'); 
 const resIdpel = document.getElementById('res-idpel');
@@ -45,6 +51,10 @@ const resLokasi = document.getElementById('res-lokasi');
 const itemPeriode = document.getElementById('item-periode');
 const resPeriode = document.getElementById('res-periode');
 const itemNoPesanan = document.getElementById('item-nopesanan');
+const itemStand = document.getElementById('item-stand');
+const resStand = document.getElementById('res-stand');
+const itemDenda = document.getElementById('item-denda');
+const resDenda = document.getElementById('res-denda');
 
 // Buttons
 const uploadBtn = document.getElementById('upload-btn');
@@ -77,18 +87,30 @@ function setMode(mode) {
   console.log("Mode Switch Clicked:", mode);
   
   // UI Updates
-  if (mode === 'token') {
-    modeToken.classList.add('active');
+  if (mode === 'token' || mode === 'tagihan-pln') {
+    plnDropdown.classList.add('active');
     modePayment.classList.remove('active');
-    // scanSubtitle.textContent = 'Scan Struk Token PLN';
+    plnLabel.textContent = mode === 'token' ? 'Token PLN' : 'Tagihan Listrik';
   } else {
     modePayment.classList.add('active');
-    modeToken.classList.remove('active');
-    // scanSubtitle.textContent = 'Scan Struk Pembayaran (PDAM)';
+    plnDropdown.classList.remove('active');
   }
+  plnMenu.classList.add('hidden');
 }
 
-modeToken.addEventListener('click', () => setMode('token'));
+plnDropdown.addEventListener('click', (e) => {
+  e.stopPropagation();
+  plnMenu.classList.toggle('hidden');
+});
+
+dropdownItems.forEach(item => {
+  item.addEventListener('click', () => {
+    setMode(item.dataset.mode);
+  });
+});
+
+window.addEventListener('click', () => plnMenu.classList.add('hidden'));
+
 modePayment.addEventListener('click', () => setMode('payment'));
 
 /**
@@ -119,24 +141,36 @@ function showResult(data) {
   resIdpel.textContent = data.idpel || '-';
   resNama.textContent = data.nama || '-';
   
-  if (appMode === 'token') {
-    toggleElement(resToken.parentElement, true);
+  if (appMode === 'token' || appMode === 'tagihan-pln') {
+    const isToken = appMode === 'token';
+    toggleElement(resToken.parentElement, isToken);
     toggleElement(resTarif.parentElement, true);
-    toggleElement(resKwh.parentElement, true);
+    toggleElement(resKwh.parentElement, isToken);
     toggleElement(resPpn.parentElement, true);
-    toggleElement(resAngsmat.parentElement, true);
+    toggleElement(resAngsmat.parentElement, isToken);
     
     toggleElement(itemLokasi, false);
-    toggleElement(itemPeriode, false);
-    toggleElement(itemNoPesanan, false);
+    toggleElement(itemPeriode, !isToken);
+    toggleElement(itemNoPesanan, true);
+    toggleElement(itemStand, !isToken);
+    toggleElement(itemDenda, !isToken);
     
-    resToken.textContent = formatToken(data.token);
+    if (isToken) {
+        resToken.textContent = formatToken(data.token);
+        resKwh.textContent = formatKwh(data.kwh) || '-';
+    } else {
+        resStand.textContent = data.stand || '-';
+        resDenda.textContent = `Rp${formatRp(data.denda)}`;
+    }
+
     resTarif.textContent = data.tarif || '-';
-    resKwh.textContent = formatKwh(data.kwh) || '-';
-    resNominal.previousElementSibling.textContent = 'Nominal';
-    resNominal.textContent = `Rp${formatRp(data.nominal)}`;
+    resNominal.previousElementSibling.textContent = isToken ? 'Nominal' : 'Total Tagihan';
+    resNominal.textContent = `Rp${formatRp(isToken ? data.nominal : data.tagihan)}`;
     resPpn.textContent = `Rp${formatRpDecimal(data.ppn)}`;
     resAngsmat.textContent = `Rp${data.angsmat}`;
+    resPeriode.textContent = data.periode || '-';
+    const noPesananEl = document.getElementById('res-nopesanan');
+    if (noPesananEl) noPesananEl.textContent = data.noPesanan || '-';
 
   } else {
     toggleElement(resToken.parentElement, false);
@@ -203,7 +237,7 @@ async function processImage(source, isPdf = false) {
     if (isPdf) {
       imagePreview.classList.add('hidden');
       dropZone.classList.remove('hidden'); // Keep icon for PDF
-      data = await processPdf(source);
+      data = await processPdf(source, appMode);
     } else {
       imagePreview.src = source;
       imagePreview.classList.remove('hidden');

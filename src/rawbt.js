@@ -30,6 +30,7 @@ function generateEscPosCommands(data) {
   const LF = 0x0A;
   
   const isPayment = data.mode === 'payment';
+  const isPostpaidPLN = data.mode === 'tagihan-pln';
 
   let commands = [
     // Initialize
@@ -43,7 +44,7 @@ function generateEscPosCommands(data) {
   ];
 
   if (isPayment) {
-    // === PAYMENT MODE ===
+    // === PAYMENT MODE (PDAM) ===
     commands.push(
       ...encoder.encode('STRUK PEMBAYARAN\n'),
       ...encoder.encode('TAGIHAN\n'),
@@ -61,6 +62,36 @@ function generateEscPosCommands(data) {
       
       ESC, 0x45, 0x01, // Bold On
       ...encoder.encode(formatRow('TOTAL BAYAR', `: RP.${formatNumber(data.total)}`)),
+      ESC, 0x45, 0x00, // Bold Off
+      LF, LF,
+      
+      ESC, 0x61, 0x01, // Center
+      ...encoder.encode('Simpan Struk Ini\n'),
+      ...encoder.encode('Sebagai Bukti Pembayaran Yang Sah\n'),
+      LF,
+      ...encoder.encode('-- Terima Kasih --\n'),
+      LF
+    );
+  } else if (isPostpaidPLN) {
+    // === POSTPAID PLN MODE ===
+    commands.push(
+      ...encoder.encode('STRUK PEMBAYARAN TAGIHAN LISTRIK\n'),
+      LF,
+      
+      ESC, 0x61, 0x00, // Left
+      ...encoder.encode(formatRow('IDPEL', `: ${data.idpel}`)),
+      ...encoder.encode(formatRow('NAMA', `: ${data.nama}`)),
+      ...encoder.encode(formatRow('TRF/DAYA', `: ${data.tarif}`)),
+      ...encoder.encode(formatRow('PERIODE', `: ${data.periode}`)),
+      ...encoder.encode(formatRow('STAND MET', `: ${data.stand}`)),
+      ...encoder.encode(formatRow('TAGIHAN', `: RP. ${formatNumber(data.tagihan || data.nominal)}`)),
+      ...encoder.encode(formatRow('DENDA', `: RP. ${formatNumber(data.denda)}`)),
+      ...encoder.encode(formatRow('PPN', `: RP. ${formatNumberDecimal(data.ppn)}`)),
+      ...encoder.encode(formatRow('NO PESANAN', `: ${data.noPesanan}`)),
+      ...encoder.encode(formatRow('BIAYA ADM', `: RP. ${formatNumber(data.admin)}`)),
+      
+      ESC, 0x45, 0x01, // Bold On
+      ...encoder.encode(formatRow('TOTAL BAYAR', `: RP. ${formatNumber(data.total)}`)),
       ESC, 0x45, 0x00, // Bold Off
       LF, LF,
       

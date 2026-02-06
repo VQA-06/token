@@ -32,6 +32,10 @@ export async function parseWithGeminiVision(base64Data) {
     - total (String, e.g. "22500")
     - ppn (String, e.g. "0")
     - token (String, 20 digits, remove spaces)
+    - stand (String, e.g. "0012345-0012567". For postpaid receipts)
+    - denda (String, e.g. "5000". For postpaid receipts)
+    - periode (String, e.g. "JAN 2024". For postpaid receipts)
+    - noPesanan (String, e.g. "2502061234567890". The order/transaction number)
 
     Rules:
     1. "nominal" is the value of the token (e.g. Rp 20.000), NOT the total payment.
@@ -40,6 +44,7 @@ export async function parseWithGeminiVision(base64Data) {
     4. **KWh FORMATTING RULES**:
        - Use comma "," for the decimal separator.
        - Ensure precision matches the receipt (usually 1 or 2 decimal places).
+    5. **No Pesanan**: Look for "No. Pesanan" or "No Pesanan" or "Order No".
   `;
 
   try {
@@ -98,6 +103,10 @@ export async function parseWithGemini(rawText) {
     - total (String, e.g. "22500")
     - ppn (String, e.g. "0")
     - token (String, 20 digits, remove spaces)
+    - stand (String, e.g. "0012345-0012567". For postpaid receipts)
+    - denda (String, e.g. "5000". For postpaid receipts)
+    - periode (String, e.g. "JAN 2024". For postpaid receipts)
+    - noPesanan (String, e.g. "2502061234567890". The order/transaction number)
 
     Rules:
     1. "nominal" is the value of the token (e.g. Rp 20.000), NOT the total payment.
@@ -109,6 +118,7 @@ export async function parseWithGemini(rawText) {
        - Use comma "," for the decimal separator.
     5. Preserve all decimal separators exactly (use comma "," for Indonesian format).
     6. Ensure the "token" field contains ONLY 20 digits, no spaces or special characters.
+    7. **No Pesanan**: Look for "No. Pesanan" or "No Pesanan" or "Order No".
     
     OCR TEXT:
     ${JSON.stringify(rawText)}
