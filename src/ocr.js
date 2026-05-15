@@ -468,14 +468,43 @@ async function extractPdfTextWithLines(page) {
 }
 
 /**
- * Parser for the NEW web-receipt PDF format (e.g. Sa Cell / Tokopedia PLN).
- * Fields: PLN Meter No, Nama Pemilik, Tarif/Daya, Jumlah KWH, PLN Token, Tagihan
- * PPN and ANGS/MAT default to empty/zero if not present.
- * @param {string} text - Raw joined text from PDF
- * @returns {object|null} parsed data, or null if format not recognised
+ * Strategi "between-label": ambil teks di antara dua label anchor.
+ * Mirip dengan: "nilai field = teks setelah label_awal dan sebelum label_akhir"
+ * @param {string} text - seluruh teks PDF
+ * @param {string|RegExp} startLabel - label pembuka (regex atau string)
+ * @param {string|RegExp} endLabel   - label penutup (regex atau string)
+ * @returns {string} nilai yang ditemukan, sudah di-trim
+ */
+function extractBetween(text, startLabel, endLabel) {
+  // Bangun pola: (?:startLabel)\s*([\s\S]+?)\s*(?:endLabel)
+  const startSrc = (startLabel instanceof RegExp) ? startLabel.source : escapeRegex(startLabel);
+  const endSrc   = (endLabel   instanceof RegExp) ? endLabel.source   : escapeRegex(endLabel);
+  const pattern  = new RegExp(startSrc + '\\s*([\\s\\S]+?)\\s*(?=' + endSrc + ')', 'i');
+  const m = text.match(pattern);
+  return m ? m[1].trim() : '';
+}
+
+/** Escape karakter regex spesial dalam string biasa */
+function escapeRegex(str) {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Parser untuk format struk web baru (mis. Sa Cell / Tokopedia PLN).
+ * Menggunakan strategi "between-label": nilai diambil sebagai teks
+ * DI ANTARA dua label anchor, sehingga nama/nilai dengan karakter
+ * khusus, spasi, atau format tak biasa tetap tertangkap dengan benar.
+ *
+ * Contoh aturan Nama Pemilik:
+ *   Teks: "Nama Pemilik 842tbnfjseb8v--/*-;''' Tarif/Daya R1 /1300"
+ *   Aturan: antara "Nama Pemilik" dan "Tarif/Daya"
+ *   Hasil: "842tbnfjseb8v--/*-;'''"
+ *
+ * @param {string} text - Teks mentah dari PDF
+ * @returns {object|null} data terstruktur, atau null jika format tidak dikenali
  */
 function parseNewFormatPdf(text) {
-  // Detect this format by checking for its distinctive field labels
+  // Deteksi format ini berdasarkan label khas
   const isNewFormat =
     /PLN\s*Meter\s*No/i.test(text) ||
     /Nama\s*Pemilik/i.test(text) ||
@@ -483,7 +512,7 @@ function parseNewFormatPdf(text) {
 
   if (!isNewFormat) return null;
 
-  console.log('[NewFormat] Detected new PDF format, parsing...');
+  console.log('[NewFormat] Format baru terdeteksi, parsing dengan strategi between-label...');
 
   const result = {
     token: '',
@@ -495,114 +524,147 @@ function parseNewFormatPdf(text) {
     tagihan: '',
     admin: '',
     total: '',
-    ppn: '',        // empty by default
-    angsmat: '',    // empty by default
+    ppn: '0',
+    angsmat: '0,00/0,00',
     noPesanan: '',
     stand: '',
     denda: '',
     raw: text
   };
 
-  // Helper: extract value that follows a label in the format "Label ... Value"
-  // Works for both inline (label: value) and table-row (label ... value on same line)
-  const extract = (patterns) => {
-    for (const pattern of patterns) {
-      const m = text.match(pattern);
-      if (m && m[1] && m[1].trim()) return m[1].trim();
-    }
-    return '';
-  };
+  // ─── 1. ID Pelanggan: antara "PLN Meter No" dan label berikutnya ─────────────
+  result.idpel = extractBetween(
+    text,
+    /PLN\s*Meter\s*No/i,
+    /Nama\s*Pemilik|Tarif\/Daya|Jumlah\s*KWH|PLN\s*Token|Nama\s*Pengguna|No\s*Telp|Email|Tagihan/i
+  ).replace(/[^0-9]/g, ''); // Hanya digit
 
-  // 1. ID Pelanggan (PLN Meter No)
-  result.idpel = extract([
-    /PLN\s*Meter\s*No\s+(\d{6,15})/i,
-    /PLN\s*Meter\s*No[\s:]+([\d]+)/i,
-  ]);
-
-  // 2. Nama Pemilik → Nama
-  result.nama = extract([
-    /Nama\s*Pemilik\s+([A-Z][A-Z\s]+?)(?=\s+(?:Tarif|Jumlah|PLN|Tagihan|Biaya|Total|Nama\s*Pengguna|No\s*Telp|Email|$))/i,
-    /Nama\s*Pemilik[\s:]+([^\n]+)/i,
-  ]);
-
-  // 3. Tarif / Daya
-  result.tarif = extract([
-    /Tarif\s*\/\s*Daya\s+([A-Z0-9]+\s*\/\s*[\d.,]+)/i,
-    /Tarif\s*\/\s*Daya[\s:]+([^\n]+)/i,
-  ]);
-  // Remove trailing noise from tarif
-  if (result.tarif) {
-    result.tarif = result.tarif.replace(/\s+(Jumlah|PLN|Tagihan|Biaya|Total|Nama|No\s*Telp|Email).*$/i, '').trim();
+  // Fallback jika extractBetween gagal (PDFs yang menyatukan teks tanpa spasi antar label)
+  if (!result.idpel) {
+    const m = text.match(/PLN\s*Meter\s*No[\s:]*(\d{6,15})/i);
+    if (m) result.idpel = m[1];
   }
 
-  // 4. Jumlah KWH → KWh (keep as-is, simple numeric)
-  const kwhRaw = extract([
-    /Jumlah\s*KWH\s+([\d.,]+)/i,
-    /Jumlah\s*KWH[\s:]+([\d.,]+)/i,
-  ]);
+  // ─── 2. Nama Pemilik: antara "Nama Pemilik" dan "Tarif/Daya" ─────────────────
+  // ATURAN UTAMA: nilai = semua teks setelah "Nama Pemilik" sebelum "Tarif/Daya"
+  // Contoh: "Nama Pemilik 842tbnfjseb8v--/*-;''' Tarif/Daya R1 /1300"
+  //         → nama = "842tbnfjseb8v--/*-;'''"
+  result.nama = extractBetween(
+    text,
+    /Nama\s*Pemilik/i,
+    /Tarif\/Daya|Tarif\s*Daya|Jumlah\s*KWH|PLN\s*Token|Nama\s*Pengguna/i
+  );
+
+  // ─── 3. Tarif/Daya: antara "Tarif/Daya" dan label berikutnya ─────────────────
+  result.tarif = extractBetween(
+    text,
+    /Tarif\s*\/\s*Daya/i,
+    /Jumlah\s*KWH|PLN\s*Token|Nama\s*Pengguna|No\s*Telp|Email|Tagihan|Rincian/i
+  );
+  // Normalisasi: pastikan format "R1/1300" → "R1 /1300 VA" jika perlu
+  if (result.tarif) {
+    result.tarif = result.tarif.replace(/\s+/g, ' ').trim();
+    // Tambahkan "VA" jika ada angka daya tapi belum ada satuan
+    if (result.tarif && !result.tarif.toUpperCase().includes('VA') && /\/[\s]?\d+/.test(result.tarif)) {
+      result.tarif += ' VA';
+    }
+  }
+
+  // ─── 4. Jumlah KWH: antara "Jumlah KWH" dan label berikutnya ─────────────────
+  const kwhRaw = extractBetween(
+    text,
+    /Jumlah\s*KWH/i,
+    /PLN\s*Token|Nama\s*Pengguna|No\s*Telp|Email|Tagihan|Rincian/i
+  );
   if (kwhRaw) {
-    // In this format, dot is the DECIMAL separator (e.g. "70.50"), NOT thousands separator.
-    // Parse directly without stripping dots.
-    const numKwh = parseFloat(kwhRaw.replace(',', '.'));
+    // Normalisasi: ganti koma desimal (format Indonesia "46,8") ke titik sebelum parseFloat
+    // Tanpa ini: "46,8" → regex [^0-9.] membuang koma → "468" (salah)
+    // Dengan ini: "46,8" → "46.8" → parseFloat → 46.8 (benar)
+    const normalized = kwhRaw.trim().replace(',', '.');   // "46,8" → "46.8" | "66.00" → tetap
+    const numKwh = parseFloat(normalized.replace(/[^0-9.]/g, ''));
     result.kwh = isNaN(numKwh) ? kwhRaw : numKwh.toFixed(2).replace('.', ',');
   }
 
-  // 5. PLN Token → Nomor Token (format: XXXX-XXXX-XXXX-XXXX-XXXX or 20 digits)
-  const tokenRaw = extract([
-    /PLN\s*Token\s+([\d][\d\s-]{15,25}[\d])/i,
-    /PLN\s*Token[\s:]+([\d\s-]+)/i,
-  ]);
+  // ─── 5. PLN Token: antara "PLN Token" dan label berikutnya ───────────────────
+  const tokenRaw = extractBetween(
+    text,
+    /PLN\s*Token/i,
+    /Nama\s*Pengguna|No\s*Telp|Email|Tagihan|Rincian|Produk|Kode\s*Transaksi/i
+  );
   if (tokenRaw) {
-    // Strip all non-digits
     result.token = tokenRaw.replace(/[^0-9]/g, '');
   }
-
-  // 6. Tagihan → Nominal (in this format "Tagihan" in Rincian Pembayaran = the token value)
-  // The value is usually "Rp 100.000" or "Rp100.000"
-  const tagihanRaw = extract([
-    /Tagihan\s+Rp\s*([\d.,]+)/i,
-    /Tagihan[\s:]+Rp\s*([\d.,]+)/i,
-    /Tagihan\s+([\d.,]+)/i,
-  ]);
-  if (tagihanRaw) {
-    // Remove dots (thousands separator), keep the number
-    const cleaned = tagihanRaw.replace(/\./g, '').replace(',', '');
-    result.nominal = cleaned;
-    result.tagihan = cleaned;
+  // Fallback: cari 20 digit berurutan jika extractBetween menghasilkan empty
+  if (!result.token) {
+    const m = text.match(/PLN\s*Token[\s:]*(\d[\d\s-]{15,25}\d)/i);
+    if (m) result.token = m[1].replace(/[^0-9]/g, '');
   }
 
-  // Also try "Produk" line for denomination hint (e.g. "PLN 100.000")
-  if (!result.nominal) {
-    const produkMatch = text.match(/Produk\s+PLN\s+([\d.,]+)/i);
-    if (produkMatch) {
-      result.nominal = produkMatch[1].replace(/\./g, '').replace(',', '');
+  // ─── 6. Tagihan/Nominal ──────────────────────────────────────────────────────
+  // Format PDF baru: "Rincian Pembayaran" → "Tagihan   Rp 100.000" → "Biaya Layanan   Gratis" → "Kode Unik   Rp 0"
+  // Strategi 1 (between-label): nilai antara "Tagihan" dan "Biaya Layanan" / "Kode Unik"
+  //   Contoh teks: "Tagihan Rp 100.000 Biaya Layanan Gratis"
+  //   → nominale = "100000"
+  const tagihanBetween = extractBetween(
+    text,
+    /Tagihan/i,
+    /Biaya\s*Layanan|Kode\s*Unik|Total\s*Pembayaran|Metode\s*Pembayaran/i
+  );
+  if (tagihanBetween) {
+    const cleaned = tagihanBetween.replace(/^Rp\.?\s*/i, '').replace(/\./g, '').replace(/,/g, '').trim();
+    if (/\d/.test(cleaned)) {
+      result.nominal = cleaned;
+      result.tagihan = cleaned;
     }
   }
 
-  // 7. PPN – optional, leave empty if not found
-  const ppnRaw = extract([
-    /PPN\s+Rp\s*([\d.,]+)/i,
-    /PPN[\s:]+Rp\s*([\d.,]+)/i,
-    /PPn\s+Rp\s*([\d.,]+)/i,
-  ]);
-  // Default: '0' → formatRpDecimal() will render as "Rp0,00"
-  result.ppn = ppnRaw ? ppnRaw.replace(/\./g, '').replace(',', '.') : '0';
+  // Strategi 2 (regex langsung): tangkap nilai Rp tepat setelah "Tagihan" sebelum spasi/label berikutnya
+  // Paling andal jika antara-label masih menghasilkan noise
+  if (!result.nominal) {
+    const tagihanDirectMatch = text.match(/Tagihan\s+Rp\s*([\d.,]+)/i);
+    if (tagihanDirectMatch) {
+      const cleaned = tagihanDirectMatch[1].replace(/\./g, '').replace(/,/g, '').trim();
+      if (/\d/.test(cleaned)) {
+        result.nominal = cleaned;
+        result.tagihan = cleaned;
+      }
+    }
+  }
 
-  // 8. ANGS/MAT – optional, default "0,00/0,00" if not found
-  const angsmatRaw = extract([
-    /ANGS\s*\/\s*MAT\s+([\d.,\/]+)/i,
-    /Angsuran[\s:]+([\d.,\/]+)/i,
-  ]);
-  // Default: '0,00/0,00' → displayed as "Rp0,00/0,00"
+  // Fallback Produk: "Produk PLN 100.000" → nominal
+  if (!result.nominal) {
+    const m = text.match(/Produk\s+PLN\s+([\d.,]+)/i);
+    if (m) result.nominal = m[1].replace(/\./g, '').replace(',', '');
+  }
+
+  // ─── 7. PPN – opsional ───────────────────────────────────────────────────────
+  const ppnRaw = extractBetween(
+    text,
+    /PP[Nn]/i,
+    /ANGS|Angsuran|Total|Admin|Kode|Nama\s*Pengguna/i
+  ).replace(/^Rp\.?\s*/i, '').replace(/\./g, '').replace(',', '.').trim();
+  result.ppn = ppnRaw && /\d/.test(ppnRaw) ? ppnRaw : '0';
+
+  // ─── 8. ANGS/MAT – opsional ─────────────────────────────────────────────────
+  const angsmatRaw = extractBetween(
+    text,
+    /ANGS\s*\/\s*MAT|Angsuran/i,
+    /Total|Tagihan|Kode|Nama\s*Pengguna/i
+  ).trim();
   result.angsmat = angsmatRaw || '0,00/0,00';
 
-  // 9. No Pesanan / Kode Transaksi
-  result.noPesanan = extract([
-    /Kode\s*Transaksi\s+([A-Z0-9-]+)/i,
-    /No\.?\s*Pesanan[\s:]+([A-Z0-9]+)/i,
-  ]);
+  // ─── 9. Kode Transaksi / No Pesanan ─────────────────────────────────────────
+  result.noPesanan = extractBetween(
+    text,
+    /Kode\s*Transaksi/i,
+    /Waktu\s*Transaksi|Produk|PLN\s*Meter|Nama\s*Pemilik/i
+  );
+  if (!result.noPesanan) {
+    const m = text.match(/Kode\s*Transaksi[\s:]*(TKN-[A-Z0-9]+)/i);
+    if (m) result.noPesanan = m[1];
+  }
 
-  console.log('[NewFormat] Parsed result:', result);
+  console.log('[NewFormat] Hasil parsing between-label:', result);
   return result;
 }
 
