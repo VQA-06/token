@@ -11,6 +11,17 @@ if (pdfjsLib) {
 }
 
 /**
+ * Helper to parse Indonesian/US money strings, handling decimal cents (e.g., ,00 or .00)
+ */
+function parseMoneyString(str) {
+  if (!str) return '0';
+  let clean = str.trim().replace(/,\d{2}$/, ''); // Strip Indonesian cents (e.g. ,00)
+  clean = clean.replace(/\.\d{2}$/, '');       // Strip US cents (e.g. .00)
+  clean = clean.replace(/[^0-9]/g, '');         // Remove all non-digits
+  return clean;
+}
+
+/**
  * Perform OCR on an image and extract PLN receipt data
  * @param {string|Blob|File} imageSource 
  * @param {string} mode - 'token', 'tagihan-pln', or 'payment'
@@ -31,7 +42,12 @@ export async function processReceipt(imageSource, mode = 'token', useAI = true) 
 
     // 2. Fallback to Tesseract + Gemini Text if Vision fails or AI is disabled
     console.log(`Using Tesseract OCR (${useAI ? 'AI Fallback' : 'Standard Mode'})...`);
-    const worker = await createWorker('ind');
+    const worker = await createWorker('ind', 1, {
+      workerPath: '/tesseract/worker.min.js',
+      corePath: '/tesseract/',
+      langPath: '/tesseract/tessdata',
+      workerBlobURL: false,
+    });
     const { data: { text } } = await worker.recognize(imageSource);
     await worker.terminate();
     
@@ -100,8 +116,8 @@ function parsePLNText(text) {
 
   // 2. Extract IDPEL / Nomor Pelanggan
   const idpelMatch = text.match(/Nomor Pelanggan\s*(\d{11,12})/i) ||
-                     text.match(/IDPEL\s*[:]\s*(\d{11,12})/i) ||
-                     text.match(/ID\s*PEL\s*[:]\s*(\d{11,12})/i);
+                     text.match(/IDPEL\s*[:]?\s*(\d{11,12})/i) ||
+                     text.match(/ID\s*PEL\s*[:]?\s*(\d{11,12})/i);
   if (idpelMatch) {
     result.idpel = idpelMatch[1];
   }
@@ -151,18 +167,20 @@ function parsePLNText(text) {
                    text.match(/([\d,.]+)\s*(?:k\s*w\s*h|kwh)/i);
 
   if (kwhMatch) {
-    let val = kwhMatch[1].trim().replace(/[^0-9]/g, ''); // Extract only digits
-    
-    if (val.length === 2) {
-        // Rule: 46 -> 46,0
-        result.kwh = val + ',0';
-    } else if (val.length >= 3) {
-        // Rule: 3530 -> 35,3 (divide by 100 concept)
-        const num = parseInt(val);
-        const scaled = (num / 100).toFixed(1).replace('.', ',');
-        result.kwh = scaled;
+    let rawKwh = kwhMatch[1].trim();
+    if (rawKwh.includes(',') || rawKwh.includes('.')) {
+      result.kwh = rawKwh.replace('.', ',');
     } else {
-        result.kwh = val;
+      let val = rawKwh.replace(/[^0-9]/g, '');
+      if (val.length === 2) {
+          result.kwh = val + ',0';
+      } else if (val.length >= 3) {
+          const num = parseInt(val);
+          const scaled = (num / 100).toFixed(1).replace('.', ',');
+          result.kwh = scaled;
+      } else {
+          result.kwh = val;
+      }
     }
   }
 
@@ -182,8 +200,7 @@ function parsePLNText(text) {
                        text.match(/NOMINAL\s*[:]\s*Rp?[\s.]*([\d,.]+)/i);
   
   if (nominalMatch) {
-    let rawNominal = nominalMatch[1].trim().replace(/\./g, '').replace(/,/g, '');
-    result.nominal = snapToNearestPLN(rawNominal);
+    result.nominal = snapToNearestPLN(parseMoneyString(nominalMatch[1]));
   } else {
     // Fallback: Smart Guess - Look for 20k, 50k, 100k patterns in text if label is missing
     // We look for isolated numbers that match known denominations
@@ -195,10 +212,9 @@ function parsePLNText(text) {
   }
 
   // 7. Extract Admin (Biaya Admin)
-  const adminMatch = text.match(/Biaya Admin\s*Rp?([\d,.]+)/i) ||
-                     text.match(/ADMIN\s*[:]\s*Rp?([\d,.]+)/i);
+  const adminMatch = text.match(/(?:Biaya Admin|ADMIN BANK|ADMIN)\s*[:]?\s*Rp?[\s.]*([\d,.]+)/i);
   if (adminMatch) {
-    result.admin = adminMatch[1].trim().replace(/\./g, '').replace(/,/g, '');
+    result.admin = parseMoneyString(adminMatch[1]);
   }
 
   // 8. Extract Total Tagihan & Total Bayar
@@ -206,13 +222,13 @@ function parsePLNText(text) {
   const tagihanLabelPattern = /(?:Total\s*Tagihan|Tagihan)\s*[:]?\s*Rp?[\s.]*([\d,.]+)/i;
   const tagihanMatch = text.match(tagihanLabelPattern);
   if (tagihanMatch) {
-    result.tagihan = tagihanMatch[1].trim().replace(/\./g, '').replace(/,/g, '');
+    result.tagihan = parseMoneyString(tagihanMatch[1]);
   }
 
-  const totalLabelPattern = /(?:Total\s*Bayar|Jumlah\s*Bayar|TOTAL)\s*[:]?\s*Rp?[\s.]*([\d,.]+)/i;
+  const totalLabelPattern = /(?:Total\s*Bayar|Jumlah\s*Bayar|RP\s*BAYAR|TOTAL)\s*[:]?\s*Rp?[\s.]*([\d,.]+)/i;
   const totalMatch = text.match(totalLabelPattern);
   if (totalMatch) {
-    result.total = totalMatch[1].trim().replace(/\./g, '').replace(/,/g, '');
+    result.total = totalMatch[1].trim();
   }
 
   // 8.5 Extract Stand Meter
@@ -225,13 +241,13 @@ function parsePLNText(text) {
   // 8.6 Extract Denda
   const dendaMatch = text.match(/Denda\s*Rp?[\s.]*([\d,.]+)/i);
   if (dendaMatch) {
-    result.denda = dendaMatch[1].trim().replace(/\./g, '').replace(/,/g, '');
+    result.denda = parseMoneyString(dendaMatch[1]);
   }
 
   // 9. Extract PPN
   const ppnMatch = text.match(/PPn\s*Rp?([\d,.]+)/i);
   if (ppnMatch) {
-    result.ppn = ppnMatch[1].trim().replace(/ /g, '');
+    result.ppn = parseMoneyString(ppnMatch[1]);
   }
 
   // Final sanitization for all results
@@ -392,22 +408,19 @@ function parsePaymentText(text) {
   // 5. Extract Total Tagihan (before admin)
   const tagihanMatch = text.match(/(?:Tagihan|Jml Tagihan|Total Air|Biaya Air|Total Tagihan)\s*[:]?\s*Rp?[\s.]*([\d,.]+)/i);
   if (tagihanMatch) {
-    let raw = tagihanMatch[1].trim().replace(/\./g, '').replace(/,/g, '');
-    result.tagihan = raw;
+    result.tagihan = parseMoneyString(tagihanMatch[1]);
   }
 
   // 6. Extract Admin (if present on receipt)
   const adminMatch = text.match(/(?:Biaya Admin|Admin|Adm)\s*[:]?\s*Rp?[\s.]*([\d,.]+)/i);
   if (adminMatch) {
-     let raw = adminMatch[1].trim().replace(/\./g, '').replace(/,/g, '');
-     result.admin = raw;
+     result.admin = parseMoneyString(adminMatch[1]);
   }
 
   // 7. Extract Total Bayar
   const totalMatch = text.match(/(?:Total Bayar|Total)\s*[:]?\s*Rp?[\s.]*([\d,.]+)/i);
   if (totalMatch) {
-    let raw = totalMatch[1].trim().replace(/\./g, '').replace(/,/g, '');
-    result.total = raw;
+    result.total = parseMoneyString(totalMatch[1]);
   }
   
   // If we found tagihan but no total, default total = tagihan
