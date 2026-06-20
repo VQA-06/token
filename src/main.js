@@ -266,18 +266,65 @@ async function processImage(source, isPdf = false) {
 }
 
 /**
+ * Detect actual MIME type of a file by reading its magic bytes.
+ * Supports PDF, PNG, JPEG, GIF, and WebP.
+ * @param {File} file 
+ * @returns {Promise<string>}
+ */
+function detectFileType(file) {
+  return new Promise((resolve) => {
+    const slice = file.slice(0, 12);
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const buffer = e.target.result;
+      const view = new Uint8Array(buffer);
+      if (view.length < 4) {
+        resolve('unknown');
+        return;
+      }
+      
+      const hex = Array.from(view).map(b => b.toString(16).padStart(2, '0')).join('');
+      
+      if (hex.startsWith('89504e47')) {
+        resolve('image/png');
+      } else if (hex.startsWith('ffd8ff')) {
+        resolve('image/jpeg');
+      } else if (hex.startsWith('25504446')) {
+        resolve('application/pdf');
+      } else if (hex.startsWith('47494638')) {
+        resolve('image/gif');
+      } else if (hex.startsWith('52494646') && hex.slice(16, 24) === '57454250') {
+        resolve('image/webp');
+      } else {
+        resolve('unknown');
+      }
+    };
+    reader.onerror = () => resolve('unknown');
+    reader.readAsArrayBuffer(slice);
+  });
+}
+
+/**
  * Event Listeners
  */
 
 uploadBtn.addEventListener('click', () => fileInput.click());
 
-fileInput.addEventListener('change', (e) => {
+fileInput.addEventListener('change', async (e) => {
   const file = e.target.files[0];
   if (file) {
-    const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+    const realType = await detectFileType(file);
+    const isPdf = realType === 'application/pdf' || (realType === 'unknown' && file.name.toLowerCase().endsWith('.pdf'));
+    
+    // If the file is actually an image but has application/pdf MIME type due to extension,
+    // we wrap it as a Blob with the corrected type so FileReader uses the right data URL prefix.
+    const fileToProcess = (realType !== 'unknown' && realType !== 'application/pdf' && file.type === 'application/pdf')
+      ? new Blob([file], { type: realType })
+      : file;
+
     const reader = new FileReader();
     reader.onload = (event) => processImage(event.target.result, isPdf);
-    reader.readAsDataURL(file);
+    reader.readAsDataURL(fileToProcess);
   }
 });
 
