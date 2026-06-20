@@ -237,7 +237,28 @@ async function processImage(source, isPdf = false) {
     if (isPdf) {
       imagePreview.classList.add('hidden');
       dropZone.classList.remove('hidden'); // Keep icon for PDF
-      data = await processPdf(source, appMode);
+      try {
+        data = await processPdf(source, appMode);
+      } catch (pdfErr) {
+        // If PDF parsing fails with "Invalid PDF structure", the file is likely an image
+        // with a misleading .pdf extension. Retry as image.
+        if (pdfErr.message && pdfErr.message.includes('Invalid PDF structure')) {
+          console.warn('[processImage] PDF parsing failed, retrying as image...', pdfErr.message);
+          statusText.textContent = 'File bukan PDF asli, memproses sebagai gambar...';
+          // Fix the data URL prefix if it says application/pdf but is actually an image
+          let imageSource = source;
+          if (source.startsWith('data:application/pdf')) {
+            imageSource = source.replace('data:application/pdf', 'data:image/png');
+          }
+          imagePreview.src = imageSource;
+          imagePreview.classList.remove('hidden');
+          dropZone.classList.add('hidden');
+          document.querySelector('.scanner-container').classList.add('has-image');
+          data = await processReceipt(imageSource, appMode);
+        } else {
+          throw pdfErr; // Re-throw other PDF errors
+        }
+      }
     } else {
       imagePreview.src = source;
       imagePreview.classList.remove('hidden');
@@ -279,11 +300,13 @@ function detectFileType(file) {
       const buffer = e.target.result;
       const view = new Uint8Array(buffer);
       if (view.length < 4) {
+        console.warn('[detectFileType] File too small, returning unknown');
         resolve('unknown');
         return;
       }
       
       const hex = Array.from(view).map(b => b.toString(16).padStart(2, '0')).join('');
+      console.log('[detectFileType] Magic bytes:', hex.substring(0, 16), 'file.name:', file.name, 'file.type:', file.type);
       
       if (hex.startsWith('89504e47')) {
         resolve('image/png');
@@ -299,7 +322,10 @@ function detectFileType(file) {
         resolve('unknown');
       }
     };
-    reader.onerror = () => resolve('unknown');
+    reader.onerror = () => {
+      console.warn('[detectFileType] FileReader error, returning unknown');
+      resolve('unknown');
+    };
     reader.readAsArrayBuffer(slice);
   });
 }
@@ -316,11 +342,18 @@ fileInput.addEventListener('change', async (e) => {
     const realType = await detectFileType(file);
     const isPdf = realType === 'application/pdf' || (realType === 'unknown' && file.name.toLowerCase().endsWith('.pdf'));
     
+    console.log('[FileUpload] realType:', realType, 'isPdf:', isPdf, 'file.type:', file.type, 'file.name:', file.name);
+    
     // If the file is actually an image but has application/pdf MIME type due to extension,
     // we wrap it as a Blob with the corrected type so FileReader uses the right data URL prefix.
-    const fileToProcess = (realType !== 'unknown' && realType !== 'application/pdf' && file.type === 'application/pdf')
+    const isImageMaskedAsPdf = realType.startsWith('image/') && (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf'));
+    const fileToProcess = isImageMaskedAsPdf
       ? new Blob([file], { type: realType })
       : file;
+
+    if (isImageMaskedAsPdf) {
+      console.log('[FileUpload] Corrected MIME type from', file.type, 'to', realType);
+    }
 
     const reader = new FileReader();
     reader.onload = (event) => processImage(event.target.result, isPdf);
