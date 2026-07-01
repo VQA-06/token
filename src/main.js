@@ -5,6 +5,7 @@ import { printViaRawBT } from './rawbt';
 // State
 let currentReceiptData = null;
 let appMode = 'token'; // 'token' or 'payment'
+let autoPrintEnabled = localStorage.getItem('autoPrint') === 'true';
 
 // DEBUG: Global Error Handler
 window.onerror = function(msg, url, line) {
@@ -22,6 +23,16 @@ const fileInput = document.getElementById('file-input');
 const ocrStatus = document.getElementById('ocr-status');
 const statusText = document.getElementById('status-text');
 const installBtn = document.getElementById('install-btn');
+const autoPrintSwitch = document.getElementById('auto-print-switch');
+
+// Restore auto-print toggle state
+if (autoPrintSwitch) {
+  autoPrintSwitch.checked = autoPrintEnabled;
+  autoPrintSwitch.addEventListener('change', () => {
+    autoPrintEnabled = autoPrintSwitch.checked;
+    localStorage.setItem('autoPrint', autoPrintEnabled);
+  });
+}
 
 // Mode Switch Elements
 const modeToken = document.getElementById('mode-token');
@@ -280,6 +291,17 @@ async function processImage(source, isPdf = false) {
     }
 
     showResult(data);
+
+    // Auto-print if enabled
+    if (autoPrintEnabled && currentReceiptData) {
+      try {
+        const storeName = localStorage.getItem('storeName') || 'SA CELL';
+        await printViaRawBT({ ...currentReceiptData, storeName, mode: appMode });
+        showToast('Auto-print: Berhasil dikirim ke RawBT!');
+      } catch (err) {
+        showToast('Auto-print gagal: ' + err.message);
+      }
+    }
   } catch (err) {
     showToast('Gagal memproses file: ' + err.message);
     ocrStatus.classList.add('hidden');

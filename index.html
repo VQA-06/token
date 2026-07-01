@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Outfit:wght@500;600;700&display=swap" rel="stylesheet">
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.min.mjs" type="module"></script>
+  <script src="/pdfjs/pdf.min.mjs" type="module"></script>
 </head>
 <body>
   <div id="app">
@@ -43,7 +43,16 @@
     <main>
       <section id="scanner-section" class="card fade-in">
         <div class="card-content">
-          <h1>Scan Struk</h1>
+          <div class="card-header-row">
+            <h1>Scan Struk</h1>
+            <div class="auto-print-toggle" title="Auto Print">
+              <span class="toggle-label">Auto Print</span>
+              <label class="switch" for="auto-print-switch">
+                <input type="checkbox" id="auto-print-switch">
+                <span class="slider"></span>
+              </label>
+            </div>
+          </div>
           <div class="mode-switch-container">
             <div class="dropdown">
               <button id="mode-pln-dropdown" class="mode-btn active">

@@ -6,8 +6,8 @@ import { parseWithGemini, parseWithGeminiVision } from './gemini.js';
 const pdfjsLib = window.pdfjsLib;
 
 if (pdfjsLib) {
-  // Use a compatible worker version from CDN
-  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.0.379/pdf.worker.min.mjs';
+  // Use a local worker version for offline capability
+  pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdfjs/pdf.worker.min.mjs';
 }
 
 /**
