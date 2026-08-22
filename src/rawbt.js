@@ -3,33 +3,38 @@ export async function printViaRawBT(data) {
     const commands = generateEscPosCommands(data);
     const base64Data = btoa(String.fromCharCode(...commands));
     
-    // 1. Primary Strategy: Silent HTTP Print via RawBT Local Server (Port 40213)
+    // 1. Primary Strategy: RawBT WS API via WebSocket (port 40213)
     // Eliminates Chrome "Open in external app?" popups & permission prompts completely!
-    let printedSilently = false;
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 1200);
+    let printedSilently = await printViaWebSocket(base64Data);
 
-      const res = await fetch('http://127.0.0.1:40213/', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: base64Data,
-        signal: controller.signal
-      });
-      clearTimeout(timeoutId);
+    // 2. Secondary Strategy: Silent HTTP POST to RawBT Local Server (port 40213)
+    if (!printedSilently) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 1000);
 
-      if (res.ok || res.status === 200) {
-        console.log('Silent print via RawBT Local Web Server success!');
-        printedSilently = true;
+        const res = await fetch('http://127.0.0.1:40213/', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: base64Data,
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+
+        if (res.ok || res.status === 200) {
+          console.log('Silent print via RawBT Local HTTP Server success!');
+          printedSilently = true;
+        }
+      } catch (silentErr) {
+        console.log('RawBT Local HTTP Server inactive:', silentErr.message);
       }
-    } catch (silentErr) {
-      console.log('RawBT Local Server inactive, using Intent fallback:', silentErr.message);
     }
 
     if (printedSilently) return;
 
-    // 2. Fallback Strategy: Android Intent URL
-    // (Used if "Server Pencetakan" is OFF in RawBT settings)
+    // 3. Fallback Strategy: Android Intent URL
+    // (Used if WS API / Local Server is OFF in RawBT settings)
+    console.log('RawBT WS API / Server inactive, falling back to Intent...');
     const intentUrl = `intent:base64,${base64Data}#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;`;
     
     const link = document.createElement('a');
@@ -48,6 +53,56 @@ export async function printViaRawBT(data) {
     console.error('RawBT Print Error:', error);
     throw new Error('Gagal mengirim ke RawBT.');
   }
+}
+
+/**
+ * Send data silently via RawBT WS API (WebSocket on port 40213)
+ * @param {string} base64Data 
+ * @returns {Promise<boolean>}
+ */
+function printViaWebSocket(base64Data) {
+  return new Promise((resolve) => {
+    let resolved = false;
+    let ws;
+
+    const timer = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        if (ws) try { ws.close(); } catch (e) {}
+        resolve(false);
+      }
+    }, 1000);
+
+    try {
+      ws = new WebSocket('ws://127.0.0.1:40213');
+
+      ws.onopen = () => {
+        ws.send(base64Data);
+        setTimeout(() => {
+          if (!resolved) {
+            resolved = true;
+            try { ws.close(); } catch (e) {}
+            console.log('Silent print via RawBT WS API (WebSocket) success!');
+            resolve(true);
+          }
+        }, 150);
+      };
+
+      ws.onerror = (err) => {
+        if (!resolved) {
+          resolved = true;
+          clearTimeout(timer);
+          resolve(false);
+        }
+      };
+    } catch (e) {
+      if (!resolved) {
+        resolved = true;
+        clearTimeout(timer);
+        resolve(false);
+      }
+    }
+  });
 }
 
 /**
