@@ -3,51 +3,26 @@ export async function printViaRawBT(data) {
     const commands = generateEscPosCommands(data);
     const base64Data = btoa(String.fromCharCode(...commands));
     
-    // 1. Primary Strategy: RawBT WS API via WebSocket (port 40213)
-    // Eliminates Chrome "Open in external app?" popups & permission prompts completely!
-    let printedSilently = await printViaWebSocket(base64Data);
+    // 1. Primary Strategy: RawBT WS API via WebSocket (port 40213, fast 250ms check)
+    let printedSilently = await printViaWebSocket(base64Data, 250);
 
-    // 2. Secondary Strategy: Silent HTTP POST to RawBT Local Server (port 40213)
+    // 2. Secondary Strategy: Silent HTTP POST to RawBT Local Server (port 40213, fast 250ms check)
     if (!printedSilently) {
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 1000);
-
-        const res = await fetch('http://127.0.0.1:40213/', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: base64Data,
-          signal: controller.signal
-        });
-        clearTimeout(timeoutId);
-
-        if (res.ok || res.status === 200) {
-          console.log('Silent print via RawBT Local HTTP Server success!');
-          printedSilently = true;
-        }
-      } catch (silentErr) {
-        console.log('RawBT Local HTTP Server inactive:', silentErr.message);
-      }
+      printedSilently = await printViaHttp(base64Data, 250);
     }
 
-    if (printedSilently) return;
+    if (printedSilently) {
+      console.log('Printed silently via RawBT Local Service!');
+      return;
+    }
 
     // 3. Fallback Strategy: Android Intent URL
     // (Used if WS API / Local Server is OFF in RawBT settings)
     console.log('RawBT WS API / Server inactive, falling back to Intent...');
     const intentUrl = `intent:base64,${base64Data}#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;`;
     
-    const link = document.createElement('a');
-    link.href = intentUrl;
-    link.rel = 'noopener';
-    document.body.appendChild(link);
-    link.click();
-
-    setTimeout(() => {
-      if (document.body.contains(link)) {
-        document.body.removeChild(link);
-      }
-    }, 500);
+    // Direct location redirect for reliable Intent opening
+    window.location.href = intentUrl;
 
   } catch (error) {
     console.error('RawBT Print Error:', error);
@@ -57,10 +32,8 @@ export async function printViaRawBT(data) {
 
 /**
  * Send data silently via RawBT WS API (WebSocket on port 40213)
- * @param {string} base64Data 
- * @returns {Promise<boolean>}
  */
-function printViaWebSocket(base64Data) {
+function printViaWebSocket(base64Data, timeoutMs = 250) {
   return new Promise((resolve) => {
     let resolved = false;
     let ws;
@@ -71,7 +44,7 @@ function printViaWebSocket(base64Data) {
         if (ws) try { ws.close(); } catch (e) {}
         resolve(false);
       }
-    }, 1000);
+    }, timeoutMs);
 
     try {
       ws = new WebSocket('ws://127.0.0.1:40213');
@@ -81,14 +54,15 @@ function printViaWebSocket(base64Data) {
         setTimeout(() => {
           if (!resolved) {
             resolved = true;
+            clearTimeout(timer);
             try { ws.close(); } catch (e) {}
             console.log('Silent print via RawBT WS API (WebSocket) success!');
             resolve(true);
           }
-        }, 150);
+        }, 100);
       };
 
-      ws.onerror = (err) => {
+      ws.onerror = () => {
         if (!resolved) {
           resolved = true;
           clearTimeout(timer);
@@ -101,6 +75,35 @@ function printViaWebSocket(base64Data) {
         clearTimeout(timer);
         resolve(false);
       }
+    }
+  });
+}
+
+/**
+ * Send data silently via RawBT HTTP Server (port 40213)
+ */
+function printViaHttp(base64Data, timeoutMs = 250) {
+  return new Promise(async (resolve) => {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+      const res = await fetch('http://127.0.0.1:40213/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: base64Data,
+        signal: controller.signal
+      });
+      clearTimeout(timer);
+
+      if (res.ok || res.status === 200) {
+        console.log('Silent print via RawBT HTTP Server success!');
+        resolve(true);
+      } else {
+        resolve(false);
+      }
+    } catch (e) {
+      resolve(false);
     }
   });
 }
