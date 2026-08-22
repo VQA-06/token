@@ -439,8 +439,44 @@ saveSettingsBtn.addEventListener('click', () => {
   }
 });
 
-window.addEventListener('click', (e) => {
-  if (e.target === settingsModal) settingsModal.classList.add('hidden');
+const clearCacheBtn = document.getElementById('clear-cache-btn');
+if (clearCacheBtn) {
+  clearCacheBtn.addEventListener('click', async () => {
+    if (confirm('Bersihkan semua cache dan muat ulang aplikasi?')) {
+      try {
+        sessionStorage.clear();
+        currentReceiptData = null;
+        if ('caches' in window) {
+          const keys = await caches.keys();
+          await Promise.all(keys.map(key => caches.delete(key)));
+        }
+        showToast('Cache berhasil dibersihkan! Memuat ulang...', 2000);
+        setTimeout(() => window.location.reload(true), 1000);
+      } catch (err) {
+        window.location.reload(true);
+      }
+    }
+  });
+}
+
+/**
+ * Auto Cleanup: Reset temporary memory state when PWA/Page is closed or reloaded
+ */
+function cleanupSessionState() {
+  currentReceiptData = null;
+  sessionStorage.clear();
+  if (fileInput) fileInput.value = '';
+  if (imagePreview) {
+    imagePreview.src = '';
+    imagePreview.classList.add('hidden');
+  }
+}
+
+window.addEventListener('pagehide', cleanupSessionState);
+window.addEventListener('beforeunload', cleanupSessionState);
+window.addEventListener('DOMContentLoaded', () => {
+  cleanupSessionState();
+  showScanner();
 });
 
 function toggleElement(element, visible) {
