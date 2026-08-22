@@ -439,43 +439,40 @@ saveSettingsBtn.addEventListener('click', () => {
   }
 });
 
-const clearCacheBtn = document.getElementById('clear-cache-btn');
-if (clearCacheBtn) {
-  clearCacheBtn.addEventListener('click', async () => {
-    if (confirm('Bersihkan semua cache dan muat ulang aplikasi?')) {
-      try {
-        sessionStorage.clear();
-        currentReceiptData = null;
-        if ('caches' in window) {
-          const keys = await caches.keys();
-          await Promise.all(keys.map(key => caches.delete(key)));
-        }
-        showToast('Cache berhasil dibersihkan! Memuat ulang...', 2000);
-        setTimeout(() => window.location.reload(true), 1000);
-      } catch (err) {
-        window.location.reload(true);
-      }
-    }
-  });
-}
-
 /**
- * Auto Cleanup: Reset temporary memory state when PWA/Page is closed or reloaded
+ * 100% Fully Automatic Cleanup:
+ * Clears temporary session storage, runtime image cache, memory state, and input data
+ * automatically whenever the application is closed, exited, or re-opened.
  */
-function cleanupSessionState() {
+async function autoCleanSessionAndCache() {
   currentReceiptData = null;
   sessionStorage.clear();
+
   if (fileInput) fileInput.value = '';
   if (imagePreview) {
     imagePreview.src = '';
     imagePreview.classList.add('hidden');
   }
+
+  // Clear runtime dynamic caches automatically
+  if ('caches' in window) {
+    try {
+      const keys = await caches.keys();
+      for (const key of keys) {
+        if (key.includes('runtime') || key.includes('dynamic')) {
+          await caches.delete(key);
+        }
+      }
+    } catch (e) {
+      console.warn('[AutoClean] Cache cleanup note:', e);
+    }
+  }
 }
 
-window.addEventListener('pagehide', cleanupSessionState);
-window.addEventListener('beforeunload', cleanupSessionState);
+window.addEventListener('pagehide', autoCleanSessionAndCache);
+window.addEventListener('beforeunload', autoCleanSessionAndCache);
 window.addEventListener('DOMContentLoaded', () => {
-  cleanupSessionState();
+  autoCleanSessionAndCache();
   showScanner();
 });
 
