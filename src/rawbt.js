@@ -1,116 +1,19 @@
 export async function printViaRawBT(data) {
   try {
-    const commandsArray = generateEscPosCommands(data); // Uint8Array
-    const base64Data = btoa(String.fromCharCode(...commandsArray));
+    const commands = generateEscPosCommands(data);
+    const base64Data = btoa(String.fromCharCode(...commands));
     
-    // 1. Primary Strategy: RawBT WS API via WebSocket (port 40213) with raw binary ArrayBuffer
-    let printedSilently = await printViaWebSocket(commandsArray.buffer, 250);
-
-    // 2. Secondary Strategy: Silent HTTP POST to RawBT Local Server (port 40213) with raw binary
-    if (!printedSilently) {
-      printedSilently = await printViaHttp(commandsArray.buffer, 250);
-    }
-
-    if (printedSilently) {
-      console.log('Printed silently via RawBT Local Service!');
-      return;
-    }
-
-    // 3. Fallback Strategy: Android Intent URL
-    // (Used if WS API / Local Server is OFF in RawBT settings)
-    console.log('RawBT WS API / Server inactive, falling back to Intent...');
-    const intentUrl = `intent:base64,${base64Data}#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;`;
+    // Construct Android Intent URL according to RawBT Official API
+    // https://rawbt.ru/api.html
+    const intentUrl = `intent:base64,${base64Data}#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;S.browser_fallback_url=${encodeURIComponent(window.location.href)};end;`;
     
-    // Direct location redirect for reliable Intent opening
+    // Redirect to RawBT app
     window.location.href = intentUrl;
 
   } catch (error) {
     console.error('RawBT Print Error:', error);
-    throw new Error('Gagal mengirim ke RawBT.');
+    throw new Error('Gagal membuka aplikasi RawBT.');
   }
-}
-
-/**
- * Send data silently via RawBT WS API (WebSocket on port 40213)
- * @param {ArrayBuffer} arrayBuffer 
- * @param {number} timeoutMs 
- */
-function printViaWebSocket(arrayBuffer, timeoutMs = 250) {
-  return new Promise((resolve) => {
-    let resolved = false;
-    let ws;
-
-    const timer = setTimeout(() => {
-      if (!resolved) {
-        resolved = true;
-        if (ws) try { ws.close(); } catch (e) {}
-        resolve(false);
-      }
-    }, timeoutMs);
-
-    try {
-      ws = new WebSocket('ws://127.0.0.1:40213');
-      ws.binaryType = 'arraybuffer';
-
-      ws.onopen = () => {
-        ws.send(arrayBuffer);
-        setTimeout(() => {
-          if (!resolved) {
-            resolved = true;
-            clearTimeout(timer);
-            try { ws.close(); } catch (e) {}
-            console.log('Silent print via RawBT WS API (WebSocket binary) success!');
-            resolve(true);
-          }
-        }, 100);
-      };
-
-      ws.onerror = () => {
-        if (!resolved) {
-          resolved = true;
-          clearTimeout(timer);
-          resolve(false);
-        }
-      };
-    } catch (e) {
-      if (!resolved) {
-        resolved = true;
-        clearTimeout(timer);
-        resolve(false);
-      }
-    }
-  });
-}
-
-/**
- * Send data silently via RawBT HTTP Server (port 40213)
- * @param {ArrayBuffer} arrayBuffer 
- * @param {number} timeoutMs 
- */
-function printViaHttp(arrayBuffer, timeoutMs = 250) {
-  return new Promise(async (resolve) => {
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-      const res = await fetch('http://127.0.0.1:40213/', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/octet-stream' },
-        body: arrayBuffer,
-        signal: controller.signal
-      });
-      clearTimeout(timer);
-
-      if (res.ok || res.status === 200) {
-        console.log('Silent print via RawBT HTTP Server success!');
-        resolve(true);
-      } else {
-        resolve(false);
-      }
-    } catch (e) {
-      resolve(false);
-    }
-  });
 }
 
 /**
