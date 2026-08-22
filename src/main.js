@@ -279,16 +279,18 @@ async function processImage(source, isPdf = false) {
       data = await processReceipt(source, appMode);
     }
 
-    if (appMode === 'token' && !data.token) {
-      statusText.textContent = 'Token tidak ditemukan. Coba lagi.';
-      setTimeout(() => ocrStatus.classList.add('hidden'), 3000);
+    // Allow displaying result if token OR any key PLN field (IDPEL/Nama/Tagihan) is found
+    const hasAnyPLNData = data && (data.token || data.idpel || data.nama || data.tagihan || data.nominal);
+    if (appMode === 'token' && !hasAnyPLNData) {
+      statusText.textContent = 'Data struk tidak terbaca. Pastikan foto cukup terang.';
+      setTimeout(() => ocrStatus.classList.add('hidden'), 4000);
       return;
     }
 
-    if (appMode === 'payment' && !data.tagihan && !data.total) {
-        statusText.textContent = 'Bukan struk pembayaran yang dikenali. Coba lagi.';
-        setTimeout(() => ocrStatus.classList.add('hidden'), 3000);
-        return;
+    if (appMode === 'payment' && !data.tagihan && !data.total && !data.idpel && !data.nama) {
+      statusText.textContent = 'Bukan struk pembayaran yang dikenali. Coba lagi.';
+      setTimeout(() => ocrStatus.classList.add('hidden'), 4000);
+      return;
     }
 
     showResult(data);
