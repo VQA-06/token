@@ -3,11 +3,35 @@ export async function printViaRawBT(data) {
     const commands = generateEscPosCommands(data);
     const base64Data = btoa(String.fromCharCode(...commands));
     
-    // Construct Android Intent URL
-    // Documentation: https://rawbt.ru/api.html
+    // 1. Primary Strategy: Silent HTTP Print via RawBT Local Server (Port 40213)
+    // Eliminates Chrome "Open in external app?" popups & permission prompts completely!
+    let printedSilently = false;
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 1200);
+
+      const res = await fetch('http://127.0.0.1:40213/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: base64Data,
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+
+      if (res.ok || res.status === 200) {
+        console.log('Silent print via RawBT Local Web Server success!');
+        printedSilently = true;
+      }
+    } catch (silentErr) {
+      console.log('RawBT Local Server inactive, using Intent fallback:', silentErr.message);
+    }
+
+    if (printedSilently) return;
+
+    // 2. Fallback Strategy: Android Intent URL
+    // (Used if "Server Pencetakan" is OFF in RawBT settings)
     const intentUrl = `intent:base64,${base64Data}#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;`;
     
-    // Trigger Intent via link element to avoid page reload & user gesture blocks
     const link = document.createElement('a');
     link.href = intentUrl;
     link.rel = 'noopener';
@@ -22,7 +46,7 @@ export async function printViaRawBT(data) {
 
   } catch (error) {
     console.error('RawBT Print Error:', error);
-    throw new Error('Gagal membuka aplikasi RawBT.');
+    throw new Error('Gagal mengirim ke RawBT.');
   }
 }
 
