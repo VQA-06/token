@@ -3,18 +3,12 @@ export async function printViaRawBT(data) {
     const commands = generateEscPosCommands(data);
     const base64Data = btoa(String.fromCharCode(...commands));
     
-    // Construct Android Intent URL without S.browser_fallback_url
-    // Prevents Chrome from reloading/refreshing the web page on intent launch
-    const intentUrl = `intent:base64,${base64Data}#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;`;
+    // Construct Direct RawBT Protocol Scheme (rawbt:base64,...)
+    // Official RawBT scheme: https://rawbt.ru/api.html
+    const rawbtUrl = `rawbt:base64,${base64Data}`;
     
-    // Open intent via link click to maintain web page state
-    const link = document.createElement('a');
-    link.href = intentUrl;
-    document.body.appendChild(link);
-    link.click();
-    setTimeout(() => {
-      if (document.body.contains(link)) document.body.removeChild(link);
-    }, 500);
+    // Direct launch to RawBT protocol
+    window.location.href = rawbtUrl;
 
   } catch (error) {
     console.error('RawBT Print Error:', error);
