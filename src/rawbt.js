@@ -1,14 +1,14 @@
 export async function printViaRawBT(data) {
   try {
-    const commands = generateEscPosCommands(data);
-    const base64Data = btoa(String.fromCharCode(...commands));
+    const commandsArray = generateEscPosCommands(data); // Uint8Array
+    const base64Data = btoa(String.fromCharCode(...commandsArray));
     
-    // 1. Primary Strategy: RawBT WS API via WebSocket (port 40213, fast 250ms check)
-    let printedSilently = await printViaWebSocket(base64Data, 250);
+    // 1. Primary Strategy: RawBT WS API via WebSocket (port 40213) with raw binary ArrayBuffer
+    let printedSilently = await printViaWebSocket(commandsArray.buffer, 250);
 
-    // 2. Secondary Strategy: Silent HTTP POST to RawBT Local Server (port 40213, fast 250ms check)
+    // 2. Secondary Strategy: Silent HTTP POST to RawBT Local Server (port 40213) with raw binary
     if (!printedSilently) {
-      printedSilently = await printViaHttp(base64Data, 250);
+      printedSilently = await printViaHttp(commandsArray.buffer, 250);
     }
 
     if (printedSilently) {
@@ -32,8 +32,10 @@ export async function printViaRawBT(data) {
 
 /**
  * Send data silently via RawBT WS API (WebSocket on port 40213)
+ * @param {ArrayBuffer} arrayBuffer 
+ * @param {number} timeoutMs 
  */
-function printViaWebSocket(base64Data, timeoutMs = 250) {
+function printViaWebSocket(arrayBuffer, timeoutMs = 250) {
   return new Promise((resolve) => {
     let resolved = false;
     let ws;
@@ -48,15 +50,16 @@ function printViaWebSocket(base64Data, timeoutMs = 250) {
 
     try {
       ws = new WebSocket('ws://127.0.0.1:40213');
+      ws.binaryType = 'arraybuffer';
 
       ws.onopen = () => {
-        ws.send(base64Data);
+        ws.send(arrayBuffer);
         setTimeout(() => {
           if (!resolved) {
             resolved = true;
             clearTimeout(timer);
             try { ws.close(); } catch (e) {}
-            console.log('Silent print via RawBT WS API (WebSocket) success!');
+            console.log('Silent print via RawBT WS API (WebSocket binary) success!');
             resolve(true);
           }
         }, 100);
@@ -81,8 +84,10 @@ function printViaWebSocket(base64Data, timeoutMs = 250) {
 
 /**
  * Send data silently via RawBT HTTP Server (port 40213)
+ * @param {ArrayBuffer} arrayBuffer 
+ * @param {number} timeoutMs 
  */
-function printViaHttp(base64Data, timeoutMs = 250) {
+function printViaHttp(arrayBuffer, timeoutMs = 250) {
   return new Promise(async (resolve) => {
     try {
       const controller = new AbortController();
@@ -90,8 +95,8 @@ function printViaHttp(base64Data, timeoutMs = 250) {
 
       const res = await fetch('http://127.0.0.1:40213/', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: base64Data,
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: arrayBuffer,
         signal: controller.signal
       });
       clearTimeout(timer);
