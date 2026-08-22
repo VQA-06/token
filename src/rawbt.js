@@ -5,10 +5,20 @@ export async function printViaRawBT(data) {
     
     // Construct Android Intent URL
     // Documentation: https://rawbt.ru/api.html
-    const intentUrl = `intent:base64,${base64Data}#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;S.browser_fallback_url=${encodeURIComponent(window.location.href)};end;`;
+    const intentUrl = `intent:base64,${base64Data}#Intent;scheme=rawbt;package=ru.a402d.rawbtprinter;end;`;
     
-    // Trigger Intent
-    window.location.href = intentUrl;
+    // Trigger Intent via link element to avoid page reload & user gesture blocks
+    const link = document.createElement('a');
+    link.href = intentUrl;
+    link.rel = 'noopener';
+    document.body.appendChild(link);
+    link.click();
+
+    setTimeout(() => {
+      if (document.body.contains(link)) {
+        document.body.removeChild(link);
+      }
+    }, 500);
 
   } catch (error) {
     console.error('RawBT Print Error:', error);

@@ -105,13 +105,31 @@ function parsePLNText(text) {
   }
 
   // 1. Extract Token (20 digits)
-  // Improved: Support direct text with label boundaries and messy OCR spaces
-  const tokenMatch = text.match(/Stroom\/Nomor Token\s*([\d\s]{20,25})(?=\s*(?:Nomor Meter|Nomor Pelanggan|Nama|$))/i) ||
-                     text.match(/Stroom\/Nomor Token\s*(\d{4}\s?\d{4}\s?\d{4}\s?\d{4}\s?\d{4})/i) ||
-                     text.match(/TOKEN\s*[:]\s*(\d{4}\s?\d{4}\s?\d{4}\s?\d{4}\s?\d{4})/i) ||
-                     text.match(/(\d{4}\s\d{4}\s\d{4}\s\d{4}\s\d{4})/);
+  // Multi-stage flexible regex supporting spaces, hyphens, dots, no-spaces, and OCR noise
+  let tokenMatch = text.match(/(?:Stroom\/Nomor Token|Stroom\/Token|Stroom|Token)\s*[:.-]?\s*([\d\s.-]{20,29})/i) ||
+                     text.match(/TOKEN\s*[:.-]?\s*([\d\s.-]{20,29})/i) ||
+                     text.match(/(\d{4}[\s.-]?\d{4}[\s.-]?\d{4}[\s.-]?\d{4}[\s.-]?\d{4})/);
+
   if (tokenMatch) {
-    result.token = tokenMatch[1] ? tokenMatch[1].replace(/[^0-9]/g, '') : tokenMatch[0].replace(/[^0-9]/g, '');
+    let rawStr = tokenMatch[1] ? tokenMatch[1] : tokenMatch[0];
+    let cleanDigits = rawStr.replace(/[^0-9]/g, '');
+    if (cleanDigits.length >= 20) {
+      result.token = cleanDigits.substring(0, 20);
+    }
+  }
+
+  // Fallback: If no token found, handle common OCR letter-for-digit typos (O->0, I/l->1) in 20-digit sequences
+  if (!result.token) {
+    const sanitizedText = text.replace(/([0-9OIl\s.-]{20,35})/g, (m) => {
+      return m.replace(/O/gi, '0').replace(/[Il]/g, '1');
+    });
+    const fallbackMatch = sanitizedText.match(/(\d{4}[\s.-]?\d{4}[\s.-]?\d{4}[\s.-]?\d{4}[\s.-]?\d{4})/);
+    if (fallbackMatch) {
+      const cleanDigits = fallbackMatch[0].replace(/[^0-9]/g, '');
+      if (cleanDigits.length >= 20) {
+        result.token = cleanDigits.substring(0, 20);
+      }
+    }
   }
 
   // 2. Extract IDPEL / Nomor Pelanggan

@@ -7,6 +7,11 @@ export default defineConfig({
     strictPort: true,
     host: true,
   },
+  preview: {
+    port: 5173,
+    strictPort: true,
+    host: true,
+  },
   plugins: [
     VitePWA({
       registerType: 'autoUpdate',
@@ -34,6 +39,10 @@ export default defineConfig({
             purpose: 'any maskable'
           }
         ]
+      },
+      workbox: {
+        maximumFileSizeToCacheInBytes: 15 * 1024 * 1024,
+        globPatterns: ['**/*.{js,css,html,ico,png,svg,wasm,mjs,traineddata,gz,json}']
       },
       devOptions: {
         enabled: true

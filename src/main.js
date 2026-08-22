@@ -31,6 +31,7 @@ if (autoPrintSwitch) {
   autoPrintSwitch.addEventListener('change', () => {
     autoPrintEnabled = autoPrintSwitch.checked;
     localStorage.setItem('autoPrint', autoPrintEnabled);
+    showToast(autoPrintEnabled ? 'Auto-Print DIAKTIFKAN 🖨️' : 'Auto-Print NONAKTIF');
   });
 }
 
@@ -294,13 +295,15 @@ async function processImage(source, isPdf = false) {
 
     // Auto-print if enabled
     if (autoPrintEnabled && currentReceiptData) {
-      try {
-        const storeName = localStorage.getItem('storeName') || 'SA CELL';
-        await printViaRawBT({ ...currentReceiptData, storeName, mode: appMode });
-        showToast('Auto-print: Berhasil dikirim ke RawBT!');
-      } catch (err) {
-        showToast('Auto-print gagal: ' + err.message);
-      }
+      setTimeout(async () => {
+        try {
+          const storeName = localStorage.getItem('storeName') || 'SA CELL';
+          await printViaRawBT({ ...currentReceiptData, storeName, mode: appMode });
+          showToast('Auto-print: Dikirim ke RawBT! 🖨️');
+        } catch (err) {
+          showToast('Auto-print gagal: ' + err.message);
+        }
+      }, 300);
     }
   } catch (err) {
     showToast('Gagal memproses file: ' + err.message);
