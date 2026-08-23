@@ -7,3 +7,5 @@ dev-dist
 dist-ssr
 *.log
 *.pdf
+/file/
+/ind.traineddata

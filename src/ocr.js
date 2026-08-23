@@ -104,33 +104,8 @@ function parsePLNText(text) {
     result.noPesanan = noPesananMatch[1].trim();
   }
 
-  // 1. Extract Token (20 digits)
-  // Multi-stage flexible regex supporting spaces, hyphens, dots, no-spaces, and OCR noise
-  let tokenMatch = text.match(/(?:Stroom\/Nomor Token|Stroom\/Token|Stroom|Token)\s*[:.-]?\s*([\d\s.-]{20,29})/i) ||
-                     text.match(/TOKEN\s*[:.-]?\s*([\d\s.-]{20,29})/i) ||
-                     text.match(/(\d{4}[\s.-]?\d{4}[\s.-]?\d{4}[\s.-]?\d{4}[\s.-]?\d{4})/);
-
-  if (tokenMatch) {
-    let rawStr = tokenMatch[1] ? tokenMatch[1] : tokenMatch[0];
-    let cleanDigits = rawStr.replace(/[^0-9]/g, '');
-    if (cleanDigits.length >= 20) {
-      result.token = cleanDigits.substring(0, 20);
-    }
-  }
-
-  // Fallback: If no token found, handle common OCR letter-for-digit typos (O->0, I/l->1) in 20-digit sequences
-  if (!result.token) {
-    const sanitizedText = text.replace(/([0-9OIl\s.-]{20,35})/g, (m) => {
-      return m.replace(/O/gi, '0').replace(/[Il]/g, '1');
-    });
-    const fallbackMatch = sanitizedText.match(/(\d{4}[\s.-]?\d{4}[\s.-]?\d{4}[\s.-]?\d{4}[\s.-]?\d{4})/);
-    if (fallbackMatch) {
-      const cleanDigits = fallbackMatch[0].replace(/[^0-9]/g, '');
-      if (cleanDigits.length >= 20) {
-        result.token = cleanDigits.substring(0, 20);
-      }
-    }
-  }
+  // 1. Extract Token (20 digits) using robust multi-tier extraction
+  result.token = extractTokenFromText(text);
 
   // 2. Extract IDPEL / Nomor Pelanggan
   const idpelMatch = text.match(/Nomor Pelanggan\s*(\d{11,12})/i) ||
@@ -276,6 +251,96 @@ function parsePLNText(text) {
   });
 
   return result;
+}
+
+/**
+ * Extract 20-digit PLN Token from raw text with high precision.
+ * Handles OCR noise, delimiters, and letter-to-digit typos.
+ * @param {string} text
+ * @returns {string} 20 digits token string
+ */
+export function extractTokenFromText(text) {
+  if (!text) return '';
+
+  // Clean noisy vertical bars / delimiters that OCR often confuses with 1 / l
+  let normalizedText = text.replace(/[|¦!\[\]{}]/g, ' ');
+
+  // Tier 1 (User Rule - Between Labels):
+  // Ambil teks yang berada DI ANTARA label "STROOM/TOKEN" (atau variasinya) dan label berikutnya ("ADMIN BANK", "ADMIN", "KB BUKOPIN", "TOTAL", dll.)
+  const betweenMatch = normalizedText.match(/(?:Stroom\/Nomor Token|Stroom\/Token|Kode Token|No\.?\s*Token|PLN Token|Stroom|Token)\s*[:.-]?\s*([\s\S]+?)(?=\s*(?:ADMIN\s*BANK|ADMIN|KB\s*BUKOPIN|INFORMASI|TOTAL|RP\s*BAYAR|BAYAR|$))/i);
+  if (betweenMatch) {
+    const section = betweenMatch[1].trim();
+    // 1a. Cek 5 blok 4 digit di dalam bagian antara label tersebut
+    const m5x4 = section.match(/(\d{4})[\s.-]+(\d{4})[\s.-]+(\d{4})[\s.-]+(\d{4})[\s.-]+(\d{4})/);
+    if (m5x4) {
+      return `${m5x4[1]}${m5x4[2]}${m5x4[3]}${m5x4[4]}${m5x4[5]}`;
+    }
+    // 1b. Cek 20 digit kontinu di dalam bagian antara label tersebut
+    const digitsOnly = section.replace(/[^0-9]/g, '');
+    if (digitsOnly.length === 20) {
+      return digitsOnly;
+    }
+    if (digitsOnly.length > 20) {
+      const sub5x4 = section.match(/(\d{4})[\s.-]*(\d{4})[\s.-]*(\d{4})[\s.-]*(\d{4})[\s.-]*(\d{4})/);
+      if (sub5x4) {
+        return `${sub5x4[1]}${sub5x4[2]}${sub5x4[3]}${sub5x4[4]}${sub5x4[5]}`;
+      }
+    }
+  }
+
+  // Tier 2: Search for exact 5 blocks of 4 digits anywhere in text
+  const exact5x4Match = normalizedText.match(/\b(\d{4})[\s.-]+(\d{4})[\s.-]+(\d{4})[\s.-]+(\d{4})[\s.-]+(\d{4})\b/);
+  if (exact5x4Match) {
+    const token = `${exact5x4Match[1]}${exact5x4Match[2]}${exact5x4Match[3]}${exact5x4Match[4]}${exact5x4Match[5]}`;
+    if (token.length === 20) {
+      return token;
+    }
+  }
+
+  // Tier 2: Look specifically in the line or section following STROOM / TOKEN label
+  const labelMatch = normalizedText.match(/(?:Stroom\/Nomor Token|Stroom\/Token|Kode Token|No\.?\s*Token|PLN Token|Stroom|Token)\s*[:.-]?\s*([^\n\r]+)/i);
+  if (labelMatch) {
+    const lineAfterLabel = labelMatch[1].trim();
+    // Check if this line contains 5 blocks of 4 digits
+    const line5x4 = lineAfterLabel.match(/(\d{4})[\s.-]+(\d{4})[\s.-]+(\d{4})[\s.-]+(\d{4})[\s.-]+(\d{4})/);
+    if (line5x4) {
+      return `${line5x4[1]}${line5x4[2]}${line5x4[3]}${line5x4[4]}${line5x4[5]}`;
+    }
+    // Check for continuous 20 digits
+    const line20 = lineAfterLabel.replace(/[^0-9]/g, '');
+    if (line20.length === 20) {
+      return line20;
+    }
+    if (line20.length > 20) {
+      const sub5x4 = lineAfterLabel.match(/(\d{4})[\s.-]*(\d{4})[\s.-]*(\d{4})[\s.-]*(\d{4})[\s.-]*(\d{4})/);
+      if (sub5x4) {
+        return `${sub5x4[1]}${sub5x4[2]}${sub5x4[3]}${sub5x4[4]}${sub5x4[5]}`;
+      }
+    }
+  }
+
+  // Tier 3: Search for exact 20 consecutive digits anywhere in text
+  const exact20Match = normalizedText.match(/\b(\d{20})\b/);
+  if (exact20Match) {
+    return exact20Match[1];
+  }
+
+  // Tier 4: Fallback for OCR letter-for-digit typos (O->0, I/l->1) in 5x4 blocks
+  const sanitizedText = normalizedText.replace(/([0-9OIl\s.-]{20,35})/g, (m) => {
+    return m.replace(/O/gi, '0').replace(/[Il]/g, '1');
+  });
+  const fallback5x4 = sanitizedText.match(/\b(\d{4})[\s.-]+(\d{4})[\s.-]+(\d{4})[\s.-]+(\d{4})[\s.-]+(\d{4})\b/);
+  if (fallback5x4) {
+    return `${fallback5x4[1]}${fallback5x4[2]}${fallback5x4[3]}${fallback5x4[4]}${fallback5x4[5]}`;
+  }
+
+  // Tier 5: Fallback 20 digits in sanitized text
+  const fallback20 = sanitizedText.match(/\b(\d{20})\b/);
+  if (fallback20) {
+    return fallback20[1];
+  }
+
+  return '';
 }
 
 /**
