@@ -144,16 +144,7 @@ function parsePLNText(text) {
   const namaMatch = text.match(namaLabelPattern);
   if (namaMatch) {
     let cleanNama = namaMatch[1].trim().replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ');
-    // Jika nama multi-kata dan kata terakhir menggabungkan inisial kapital (e.g. FERNANDOB -> FERNANDO B)
-    const words = cleanNama.split(' ');
-    if (words.length >= 2) {
-      const lastWord = words[words.length - 1];
-      if (lastWord.length >= 5 && /[A-Z]/.test(lastWord.slice(-1))) {
-        // Pisahkan inisial terakhir dengan spasi
-        words[words.length - 1] = lastWord.slice(0, -1) + ' ' + lastWord.slice(-1);
-        cleanNama = words.join(' ');
-      }
-    }
+    cleanNama = cleanNama.replace(/^[:\-.\s]+/, '').replace(/[:\-.\s]+$/, '');
     result.nama = cleanNama;
   }
 
