@@ -1,5 +1,6 @@
 import { createWorker } from 'tesseract.js';
 import { parseWithGemini, parseWithGeminiVision } from './gemini.js';
+import { recognizeTextWithTrOCR } from './trocr.js';
 
 // PDF.js is loaded via CDN in index.html to avoid bundling issues
 // The library exposes 'pdfjsLib' to window
@@ -22,12 +23,133 @@ function parseMoneyString(str) {
 }
 
 /**
+ * Helper to crop a rectangular region from an image (DataURL or Blob)
+ */
+async function cropImageRegion(imageSource, bbox) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        const paddingY = 20;
+        const paddingX = 20;
+
+        const x0 = Math.max(0, (bbox.x0 || 0) - paddingX);
+        const y0 = Math.max(0, (bbox.y0 || 0) - paddingY);
+        const x1 = Math.min(img.width, (bbox.x1 || img.width) + paddingX);
+        const y1 = Math.min(img.height, (bbox.y1 || img.height) + paddingY);
+        const w = Math.max(10, x1 - x0);
+        const h = Math.max(10, y1 - y0);
+
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, x0, y0, w, h, 0, 0, w, h);
+        resolve(canvas);
+      } catch (err) {
+        reject(err);
+      }
+    };
+    img.onerror = reject;
+    img.src = imageSource;
+  });
+}
+
+/**
+ * Uses Microsoft TrOCR to recognize and refine the 20-digit token with Vision Transformer
+ */
+async function refineTokenWithTrOCR(imageSource, tesseractData, fallbackToken) {
+  try {
+    console.log('[TrOCR Refiner] Memulai analisis baris token dengan Vision Transformer...');
+    const lines = tesseractData?.lines || [];
+    
+    // 1. Cari baris yang mengandung kata kunci token/stroom atau pola 4 digit berulang
+    let targetLines = lines.filter(l => {
+      const t = (l.text || '').toLowerCase();
+      return t.includes('token') || t.includes('stroom') || t.includes('kode') || /\d{4}[\s.-]+\d{4}/.test(t);
+    });
+
+    if (targetLines.length === 0) {
+      targetLines = lines.filter(l => (l.text || '').replace(/\D/g, '').length >= 10);
+    }
+
+    console.log('[TrOCR Refiner] Ditemukan kandidat baris:', targetLines.length);
+
+    for (const targetLine of targetLines) {
+      if (!targetLine.bbox) continue;
+      
+      // Crop baris penuh selebar gambar untuk menangkap seluruh kolom nilai
+      const lineBbox = {
+        x0: 0,
+        y0: targetLine.bbox.y0,
+        x1: 99999,
+        y1: targetLine.bbox.y1
+      };
+
+      const croppedCanvas = await cropImageRegion(imageSource, lineBbox);
+      console.log('[TrOCR Refiner] Mengirim potongan baris ke TrOCR...');
+      const trocrText = await recognizeTextWithTrOCR(croppedCanvas);
+      console.log('[TrOCR Refiner] Teks terbaca oleh TrOCR:', trocrText);
+
+      // Cek apakah ada 20 digit di dalam teks TrOCR
+      const digitsOnly = trocrText.replace(/\D/g, '');
+      if (digitsOnly.length === 20) {
+        console.log('[TrOCR Refiner] ✅ SUKSES! Token 20-digit terverifikasi oleh TrOCR:', digitsOnly);
+        return digitsOnly;
+      }
+      
+      const tokenMatch = trocrText.match(/(\d{4})[\s.-]*(\d{4})[\s.-]*(\d{4})[\s.-]*(\d{4})[\s.-]*(\d{4})/);
+      if (tokenMatch) {
+        const found = `${tokenMatch[1]}${tokenMatch[2]}${tokenMatch[3]}${tokenMatch[4]}${tokenMatch[5]}`;
+        if (found.length === 20) {
+          console.log('[TrOCR Refiner] ✅ SUKSES! Token 5x4 ditemukan oleh TrOCR:', found);
+          return found;
+        }
+      }
+    }
+
+    // 2. Fallback: coba crop area 40% - 70% tinggi gambar
+    console.log('[TrOCR Refiner] Mencoba crop area tengah struk...');
+    const midCropCanvas = await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const y0 = Math.round(img.height * 0.40);
+        const h = Math.round(img.height * 0.35);
+        canvas.width = img.width;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, y0, img.width, h, 0, 0, img.width, h);
+        resolve(canvas);
+      };
+      img.onerror = reject;
+      img.src = imageSource;
+    });
+
+    const midText = await recognizeTextWithTrOCR(midCropCanvas);
+    const midDigits = midText.replace(/\D/g, '');
+    if (midDigits.length === 20) {
+      console.log('[TrOCR Refiner] ✅ SUKSES dari area tengah:', midDigits);
+      return midDigits;
+    }
+
+  } catch (err) {
+    console.warn('[TrOCR Refiner] Error selama proses TrOCR:', err);
+  }
+
+  console.log('[TrOCR Refiner] Menggunakan fallback token dari Tesseract:', fallbackToken);
+  return fallbackToken;
+}
+
+/**
  * Perform OCR on an image and extract PLN receipt data
  * @param {string|Blob|File} imageSource 
  * @param {string} mode - 'token', 'tagihan-pln', or 'payment'
  * @param {boolean} useAI - Whether to use Gemini AI for parsing (disabled for PDFs)
  */
-export async function processReceipt(imageSource, mode = 'token', useAI = true) {
+export async function processReceipt(imageSource, mode = 'token', useAI = false) {
   try {
     // 1. Direct Vision Parsing (High Accuracy) - ONLY FOR IMAGES
     if (useAI) {
@@ -40,17 +162,19 @@ export async function processReceipt(imageSource, mode = 'token', useAI = true) 
         }
     }
 
-    // 2. Fallback to Tesseract + Gemini Text if Vision fails or AI is disabled
+    // 2. Tesseract OCR untuk struktur layout & metadata teks
     console.log(`Using Tesseract OCR (${useAI ? 'AI Fallback' : 'Standard Mode'})...`);
     const worker = await createWorker('ind', 1, {
       workerPath: '/tesseract/worker.min.js',
       corePath: '/tesseract/',
       langPath: '/tesseract/tessdata',
       workerBlobURL: false,
+      cacheMethod: 'none',
     });
-    const { data: { text } } = await worker.recognize(imageSource);
+    const tesseractResult = await worker.recognize(imageSource);
     await worker.terminate();
     
+    const text = tesseractResult.data.text;
     console.log('Raw OCR Text:', text);
     
     // AI Text Fallback (only if AI is permitted)
@@ -62,12 +186,23 @@ export async function processReceipt(imageSource, mode = 'token', useAI = true) 
         }
     }
 
-    // Standard Regex Parsers (Always used as final fallback or when AI is disabled)
+    // Standard Regex Parsers
+    let result;
     if (mode === 'payment') {
-        return parsePaymentText(text);
+        result = parsePaymentText(text);
     } else {
-        return parsePLNText(text);
+        result = parsePLNText(text);
     }
+
+    // 3. Khusus mode token PLN: Refinasi Nomor Token dengan TrOCR (Vision Transformer)
+    if (mode === 'token') {
+      const refinedToken = await refineTokenWithTrOCR(imageSource, tesseractResult.data, result.token);
+      if (refinedToken && refinedToken.length === 20) {
+        result.token = refinedToken;
+      }
+    }
+
+    return result;
     
   } catch (error) {
     console.error('Extraction Error:', error);
@@ -120,7 +255,18 @@ function parsePLNText(text) {
   const namaLabelPattern = /Nama\s*[:]?\s*([\s\S]+?)(?=\s*(?:Tarif\/Daya|Tarif Daya|IDPEL|Nomor|Stroom|Total|No\.\s*Pesanan|No\.\s*Meter|Bulan|Periode|$))/i;
   const namaMatch = text.match(namaLabelPattern);
   if (namaMatch) {
-    result.nama = namaMatch[1].trim();
+    let cleanNama = namaMatch[1].trim().replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ');
+    // Jika nama multi-kata dan kata terakhir menggabungkan inisial kapital (e.g. FERNANDOB -> FERNANDO B)
+    const words = cleanNama.split(' ');
+    if (words.length >= 2) {
+      const lastWord = words[words.length - 1];
+      if (lastWord.length >= 5 && /[A-Z]/.test(lastWord.slice(-1))) {
+        // Pisahkan inisial terakhir dengan spasi
+        words[words.length - 1] = lastWord.slice(0, -1) + ' ' + lastWord.slice(-1);
+        cleanNama = words.join(' ');
+      }
+    }
+    result.nama = cleanNama;
   }
 
   // 4. Extract Tarif/Daya
@@ -262,83 +408,80 @@ function parsePLNText(text) {
 export function extractTokenFromText(text) {
   if (!text) return '';
 
-  // Clean noisy vertical bars / delimiters that OCR often confuses with 1 / l
-  let normalizedText = text.replace(/[|¦!\[\]{}]/g, ' ');
+  // Normalisasi awal: ganti karakter OCR yang sering tertukar dengan spasi/digit yang benar
+  // PENTING: Jangan replace l/I/O di sini secara global — hanya lakukan di konteks digit (Tier 4)
+  let normalizedText = text.replace(/[|¦\[\]{}]/g, ' ');
 
-  // Tier 1 (User Rule - Between Labels):
-  // Ambil teks yang berada DI ANTARA label "STROOM/TOKEN" (atau variasinya) dan label berikutnya ("ADMIN BANK", "ADMIN", "KB BUKOPIN", "TOTAL", dll.)
-  const betweenMatch = normalizedText.match(/(?:Stroom\/Nomor Token|Stroom\/Token|Kode Token|No\.?\s*Token|PLN Token|Stroom|Token)\s*[:.-]?\s*([\s\S]+?)(?=\s*(?:ADMIN\s*BANK|ADMIN|KB\s*BUKOPIN|INFORMASI|TOTAL|RP\s*BAYAR|BAYAR|$))/i);
+  // ── TIER 1: Cari di antara label STROOM/TOKEN dan label berikutnya ───────────
+  // Strategi: ambil teks SETELAH label token hingga sebelum label berikutnya
+  // Khusus format ShopeePay: "STROOM/TOKEN   4942 7804 7776 2675 9609"
+  //                         (nilai berada di baris yang sama, kolom kanan)
+  const betweenMatch = normalizedText.match(
+    /(?:Stroom\/Nomor\s*Token|Stroom\/Token|Kode\s*Token|No\.?\s*Token|PLN\s*Token|Stroom|Token)\s*[:.-]?\s*([\s\S]+?)(?=\s*(?:ADMIN\s*BANK|ADMIN|KB\s*BUKOPIN|INFORMASI|TOTAL|RP\s*BAYAR|BAYAR|$))/i
+  );
   if (betweenMatch) {
     const section = betweenMatch[1].trim();
-    // 1a. Cek 5 blok 4 digit di dalam bagian antara label tersebut
+    // 1a. 5 blok 4 digit (dengan satu atau lebih pemisah: spasi, titik, strip)
     const m5x4 = section.match(/(\d{4})[\s.-]+(\d{4})[\s.-]+(\d{4})[\s.-]+(\d{4})[\s.-]+(\d{4})/);
     if (m5x4) {
       return `${m5x4[1]}${m5x4[2]}${m5x4[3]}${m5x4[4]}${m5x4[5]}`;
     }
-    // 1b. Cek 20 digit kontinu di dalam bagian antara label tersebut
+    // 1b. 5 blok 4 digit tanpa pemisah (rapat)
+    const m5x4tight = section.match(/(\d{4})[\s.-]*(\d{4})[\s.-]*(\d{4})[\s.-]*(\d{4})[\s.-]*(\d{4})/);
+    if (m5x4tight) {
+      const token = `${m5x4tight[1]}${m5x4tight[2]}${m5x4tight[3]}${m5x4tight[4]}${m5x4tight[5]}`;
+      if (token.length === 20) return token;
+    }
+    // 1c. 20 digit berurutan
     const digitsOnly = section.replace(/[^0-9]/g, '');
-    if (digitsOnly.length === 20) {
-      return digitsOnly;
-    }
-    if (digitsOnly.length > 20) {
-      const sub5x4 = section.match(/(\d{4})[\s.-]*(\d{4})[\s.-]*(\d{4})[\s.-]*(\d{4})[\s.-]*(\d{4})/);
-      if (sub5x4) {
-        return `${sub5x4[1]}${sub5x4[2]}${sub5x4[3]}${sub5x4[4]}${sub5x4[5]}`;
-      }
-    }
+    if (digitsOnly.length === 20) return digitsOnly;
   }
 
-  // Tier 2: Search for exact 5 blocks of 4 digits anywhere in text
-  const exact5x4Match = normalizedText.match(/\b(\d{4})[\s.-]+(\d{4})[\s.-]+(\d{4})[\s.-]+(\d{4})[\s.-]+(\d{4})\b/);
-  if (exact5x4Match) {
-    const token = `${exact5x4Match[1]}${exact5x4Match[2]}${exact5x4Match[3]}${exact5x4Match[4]}${exact5x4Match[5]}`;
-    if (token.length === 20) {
-      return token;
-    }
-  }
-
-  // Tier 2: Look specifically in the line or section following STROOM / TOKEN label
-  const labelMatch = normalizedText.match(/(?:Stroom\/Nomor Token|Stroom\/Token|Kode Token|No\.?\s*Token|PLN Token|Stroom|Token)\s*[:.-]?\s*([^\n\r]+)/i);
-  if (labelMatch) {
-    const lineAfterLabel = labelMatch[1].trim();
-    // Check if this line contains 5 blocks of 4 digits
+  // ── TIER 2: Cari di baris setelah label STROOM/TOKEN (cocok untuk format tabel) ──
+  // Format ShopeePay sering menempatkan nilai di baris yang sama setelah beberapa spasi
+  const labelLineMatch = normalizedText.match(
+    /(?:Stroom\/Nomor\s*Token|Stroom\/Token|Kode\s*Token|No\.?\s*Token|PLN\s*Token|Stroom|Token)\s*[:.-]?\s*([^\n\r]+)/i
+  );
+  if (labelLineMatch) {
+    const lineAfterLabel = labelLineMatch[1].trim();
+    // Cek 5 blok 4 digit di baris yang sama
     const line5x4 = lineAfterLabel.match(/(\d{4})[\s.-]+(\d{4})[\s.-]+(\d{4})[\s.-]+(\d{4})[\s.-]+(\d{4})/);
     if (line5x4) {
       return `${line5x4[1]}${line5x4[2]}${line5x4[3]}${line5x4[4]}${line5x4[5]}`;
     }
-    // Check for continuous 20 digits
+    // Cek 20 digit berurutan di baris yang sama
     const line20 = lineAfterLabel.replace(/[^0-9]/g, '');
-    if (line20.length === 20) {
-      return line20;
-    }
+    if (line20.length === 20) return line20;
     if (line20.length > 20) {
       const sub5x4 = lineAfterLabel.match(/(\d{4})[\s.-]*(\d{4})[\s.-]*(\d{4})[\s.-]*(\d{4})[\s.-]*(\d{4})/);
-      if (sub5x4) {
-        return `${sub5x4[1]}${sub5x4[2]}${sub5x4[3]}${sub5x4[4]}${sub5x4[5]}`;
-      }
+      if (sub5x4) return `${sub5x4[1]}${sub5x4[2]}${sub5x4[3]}${sub5x4[4]}${sub5x4[5]}`;
     }
   }
 
-  // Tier 3: Search for exact 20 consecutive digits anywhere in text
-  const exact20Match = normalizedText.match(/\b(\d{20})\b/);
-  if (exact20Match) {
-    return exact20Match[1];
+  // ── TIER 3: Cari 5 blok 4 digit di seluruh teks ────────────────────────────
+  const exact5x4Match = normalizedText.match(/\b(\d{4})[\s.-]+(\d{4})[\s.-]+(\d{4})[\s.-]+(\d{4})[\s.-]+(\d{4})\b/);
+  if (exact5x4Match) {
+    const token = `${exact5x4Match[1]}${exact5x4Match[2]}${exact5x4Match[3]}${exact5x4Match[4]}${exact5x4Match[5]}`;
+    if (token.length === 20) return token;
   }
 
-  // Tier 4: Fallback for OCR letter-for-digit typos (O->0, I/l->1) in 5x4 blocks
-  const sanitizedText = normalizedText.replace(/([0-9OIl\s.-]{20,35})/g, (m) => {
-    return m.replace(/O/gi, '0').replace(/[Il]/g, '1');
+  // ── TIER 4: Cari 20 digit berurutan di seluruh teks ────────────────────────
+  const exact20Match = normalizedText.match(/\b(\d{20})\b/);
+  if (exact20Match) return exact20Match[1];
+
+  // ── TIER 5: Fallback — koreksi OCR typo (O→0, l/I→1) lalu ulangi pencarian ─
+  // Hanya terapkan substitusi pada area yang kemungkinan berisi token (20-35 karakter alfanumerik)
+  const sanitizedText = normalizedText.replace(/([0-9OIlo\s.-]{18,35})/g, (m) => {
+    return m.replace(/[Oo]/g, '0').replace(/[Il]/g, '1');
   });
   const fallback5x4 = sanitizedText.match(/\b(\d{4})[\s.-]+(\d{4})[\s.-]+(\d{4})[\s.-]+(\d{4})[\s.-]+(\d{4})\b/);
   if (fallback5x4) {
     return `${fallback5x4[1]}${fallback5x4[2]}${fallback5x4[3]}${fallback5x4[4]}${fallback5x4[5]}`;
   }
 
-  // Tier 5: Fallback 20 digits in sanitized text
+  // ── TIER 6: Fallback — 20 digit setelah koreksi typo ───────────────────────
   const fallback20 = sanitizedText.match(/\b(\d{20})\b/);
-  if (fallback20) {
-    return fallback20[1];
-  }
+  if (fallback20) return fallback20[1];
 
   return '';
 }

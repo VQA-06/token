@@ -243,7 +243,21 @@ button {
   border-radius: 8px;
   text-align: center;
   letter-spacing: 2px;
-  border: 1px solid #E2E8F0;
+  border: 1.5px solid #CBD5E1;
+  transition: all 0.2s ease;
+  cursor: text;
+}
+
+.token-display:hover {
+  border-color: var(--primary);
+  background: #F8FAFC;
+}
+
+.token-display:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(0, 163, 225, 0.25);
+  background: #FFFFFF;
 }
 
 .receipt-grid {

@@ -400,6 +400,25 @@ adminSelect.addEventListener('change', () => {
   localStorage.setItem('customAdmin', value);
 });
 
+resToken.addEventListener('input', () => {
+  if (!currentReceiptData) return;
+  const raw = resToken.textContent.replace(/\D/g, '');
+  currentReceiptData.token = raw;
+  console.log('[Token Edit] Token diperbarui:', raw);
+});
+
+resNama.addEventListener('input', () => {
+  if (!currentReceiptData) return;
+  currentReceiptData.nama = resNama.textContent.trim();
+  console.log('[Nama Edit] Nama diperbarui:', currentReceiptData.nama);
+});
+
+resIdpel.addEventListener('input', () => {
+  if (!currentReceiptData) return;
+  currentReceiptData.idpel = resIdpel.textContent.trim().replace(/\D/g, '');
+  console.log('[IDPEL Edit] IDPEL diperbarui:', currentReceiptData.idpel);
+});
+
 dropZone.addEventListener('click', () => fileInput.click());
 
 printBtn.addEventListener('click', async () => {
