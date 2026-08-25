@@ -139,12 +139,22 @@ function parsePLNText(text) {
   }
 
   // 3. Extract Nama
-  // Robust Strategy: Capture EVERYTHING until the next known label
-  const namaLabelPattern = /Nama\s*[:]?\s*([\s\S]+?)(?=\s*(?:Tarif\/Daya|Tarif Daya|IDPEL|Nomor|Stroom|Total|No\.\s*Pesanan|No\.\s*Meter|Bulan|Periode|$))/i;
-  const namaMatch = text.match(namaLabelPattern);
+  // 3a. Tier 1: Ambil teks setelah label NAMA hingga sebelum TARIF/DAYA (atau label berikutnya)
+  let namaMatch = text.match(/Nama\s*[:]?\s*([\s\S]+?)(?=\s*(?:Tarif\/Daya|Tarif Daya|IDPEL|Nomor|Stroom|Total|No\.\s*Pesanan|No\.\s*Meter|Bulan|Periode|$))/i);
+  
+  // 3b. Tier 2: Aturan di antara IDPEL (11-12 digit) dan TARIF/DAYA
+  if (!namaMatch && result.idpel) {
+    const betweenIdpelAndTarif = new RegExp(`${result.idpel}\\s*([\\s\\S]+?)(?=\\s*(?:Tarif\\/Daya|Tarif\\s*Daya|Tarif|R[\\d\\w]))`, 'i');
+    namaMatch = text.match(betweenIdpelAndTarif);
+  }
+
   if (namaMatch) {
-    let cleanNama = namaMatch[1].trim().replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ');
-    cleanNama = cleanNama.replace(/^[:\-.\s]+/, '').replace(/[:\-.\s]+$/, '');
+    let cleanNama = namaMatch[1].trim()
+      .replace(/[\r\n]+/g, ' ')
+      .replace(/^(?:NAMA\s*[:\-]?\s*)/i, '')
+      .replace(/\s+/g, ' ')
+      .replace(/^[:\-.\s]+/, '')
+      .replace(/[:\-.\s]+$/, '');
     result.nama = cleanNama;
   }
 
