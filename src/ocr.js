@@ -1,6 +1,5 @@
 import { createWorker } from 'tesseract.js';
 import { parseWithGemini, parseWithGeminiVision } from './gemini.js';
-import { recognizeTextWithTrOCR } from './trocr.js';
 
 // PDF.js is loaded via CDN in index.html to avoid bundling issues
 // The library exposes 'pdfjsLib' to window
@@ -9,6 +8,34 @@ const pdfjsLib = window.pdfjsLib;
 if (pdfjsLib) {
   // Use a local worker version for offline capability
   pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdfjs/pdf.worker.min.mjs';
+}
+
+// Persistent OCR Worker Instance (Reusable across multiple scans for ultra-fast performance)
+let ocrWorkerInstance = null;
+let ocrWorkerInitPromise = null;
+
+/**
+ * Gets or initializes the persistent Tesseract worker
+ * @returns {Promise<any>}
+ */
+export async function getOcrWorker() {
+  if (ocrWorkerInstance) return ocrWorkerInstance;
+  if (ocrWorkerInitPromise) return ocrWorkerInitPromise;
+
+  ocrWorkerInitPromise = (async () => {
+    console.log('[OCR] Menginisialisasi worker OCR permanen...');
+    const worker = await createWorker('ind', 1, {
+      workerPath: '/tesseract/worker.min.js',
+      corePath: '/tesseract/',
+      langPath: '/tesseract/tessdata',
+      workerBlobURL: false,
+    });
+    ocrWorkerInstance = worker;
+    console.log('[OCR] Worker OCR siap.');
+    return worker;
+  })();
+
+  return ocrWorkerInitPromise;
 }
 
 /**
@@ -20,127 +47,6 @@ function parseMoneyString(str) {
   clean = clean.replace(/\.\d{2}$/, '');       // Strip US cents (e.g. .00)
   clean = clean.replace(/[^0-9]/g, '');         // Remove all non-digits
   return clean;
-}
-
-/**
- * Helper to crop a rectangular region from an image (DataURL or Blob)
- */
-async function cropImageRegion(imageSource, bbox) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => {
-      try {
-        const canvas = document.createElement('canvas');
-        const paddingY = 20;
-        const paddingX = 20;
-
-        const x0 = Math.max(0, (bbox.x0 || 0) - paddingX);
-        const y0 = Math.max(0, (bbox.y0 || 0) - paddingY);
-        const x1 = Math.min(img.width, (bbox.x1 || img.width) + paddingX);
-        const y1 = Math.min(img.height, (bbox.y1 || img.height) + paddingY);
-        const w = Math.max(10, x1 - x0);
-        const h = Math.max(10, y1 - y0);
-
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, x0, y0, w, h, 0, 0, w, h);
-        resolve(canvas);
-      } catch (err) {
-        reject(err);
-      }
-    };
-    img.onerror = reject;
-    img.src = imageSource;
-  });
-}
-
-/**
- * Uses Microsoft TrOCR to recognize and refine the 20-digit token with Vision Transformer
- */
-async function refineTokenWithTrOCR(imageSource, tesseractData, fallbackToken) {
-  try {
-    console.log('[TrOCR Refiner] Memulai analisis baris token dengan Vision Transformer...');
-    const lines = tesseractData?.lines || [];
-    
-    // 1. Cari baris yang mengandung kata kunci token/stroom atau pola 4 digit berulang
-    let targetLines = lines.filter(l => {
-      const t = (l.text || '').toLowerCase();
-      return t.includes('token') || t.includes('stroom') || t.includes('kode') || /\d{4}[\s.-]+\d{4}/.test(t);
-    });
-
-    if (targetLines.length === 0) {
-      targetLines = lines.filter(l => (l.text || '').replace(/\D/g, '').length >= 10);
-    }
-
-    console.log('[TrOCR Refiner] Ditemukan kandidat baris:', targetLines.length);
-
-    for (const targetLine of targetLines) {
-      if (!targetLine.bbox) continue;
-      
-      // Crop baris penuh selebar gambar untuk menangkap seluruh kolom nilai
-      const lineBbox = {
-        x0: 0,
-        y0: targetLine.bbox.y0,
-        x1: 99999,
-        y1: targetLine.bbox.y1
-      };
-
-      const croppedCanvas = await cropImageRegion(imageSource, lineBbox);
-      console.log('[TrOCR Refiner] Mengirim potongan baris ke TrOCR...');
-      const trocrText = await recognizeTextWithTrOCR(croppedCanvas);
-      console.log('[TrOCR Refiner] Teks terbaca oleh TrOCR:', trocrText);
-
-      // Cek apakah ada 20 digit di dalam teks TrOCR
-      const digitsOnly = trocrText.replace(/\D/g, '');
-      if (digitsOnly.length === 20) {
-        console.log('[TrOCR Refiner] ✅ SUKSES! Token 20-digit terverifikasi oleh TrOCR:', digitsOnly);
-        return digitsOnly;
-      }
-      
-      const tokenMatch = trocrText.match(/(\d{4})[\s.-]*(\d{4})[\s.-]*(\d{4})[\s.-]*(\d{4})[\s.-]*(\d{4})/);
-      if (tokenMatch) {
-        const found = `${tokenMatch[1]}${tokenMatch[2]}${tokenMatch[3]}${tokenMatch[4]}${tokenMatch[5]}`;
-        if (found.length === 20) {
-          console.log('[TrOCR Refiner] ✅ SUKSES! Token 5x4 ditemukan oleh TrOCR:', found);
-          return found;
-        }
-      }
-    }
-
-    // 2. Fallback: coba crop area 40% - 70% tinggi gambar
-    console.log('[TrOCR Refiner] Mencoba crop area tengah struk...');
-    const midCropCanvas = await new Promise((resolve, reject) => {
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        const y0 = Math.round(img.height * 0.40);
-        const h = Math.round(img.height * 0.35);
-        canvas.width = img.width;
-        canvas.height = h;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, y0, img.width, h, 0, 0, img.width, h);
-        resolve(canvas);
-      };
-      img.onerror = reject;
-      img.src = imageSource;
-    });
-
-    const midText = await recognizeTextWithTrOCR(midCropCanvas);
-    const midDigits = midText.replace(/\D/g, '');
-    if (midDigits.length === 20) {
-      console.log('[TrOCR Refiner] ✅ SUKSES dari area tengah:', midDigits);
-      return midDigits;
-    }
-
-  } catch (err) {
-    console.warn('[TrOCR Refiner] Error selama proses TrOCR:', err);
-  }
-
-  console.log('[TrOCR Refiner] Menggunakan fallback token dari Tesseract:', fallbackToken);
-  return fallbackToken;
 }
 
 /**
@@ -162,17 +68,10 @@ export async function processReceipt(imageSource, mode = 'token', useAI = false)
         }
     }
 
-    // 2. Tesseract OCR untuk struktur layout & metadata teks
-    console.log(`Using Tesseract OCR (${useAI ? 'AI Fallback' : 'Standard Mode'})...`);
-    const worker = await createWorker('ind', 1, {
-      workerPath: '/tesseract/worker.min.js',
-      corePath: '/tesseract/',
-      langPath: '/tesseract/tessdata',
-      workerBlobURL: false,
-      cacheMethod: 'none',
-    });
+    // 2. Tesseract OCR menggunakan worker permanen (Sangat Cepat & Akurat)
+    console.log(`Using Persistent Tesseract OCR (${useAI ? 'AI Fallback' : 'Standard Mode'})...`);
+    const worker = await getOcrWorker();
     const tesseractResult = await worker.recognize(imageSource);
-    await worker.terminate();
     
     const text = tesseractResult.data.text;
     console.log('Raw OCR Text:', text);
@@ -187,22 +86,11 @@ export async function processReceipt(imageSource, mode = 'token', useAI = false)
     }
 
     // Standard Regex Parsers
-    let result;
     if (mode === 'payment') {
-        result = parsePaymentText(text);
+        return parsePaymentText(text);
     } else {
-        result = parsePLNText(text);
+        return parsePLNText(text);
     }
-
-    // 3. Khusus mode token PLN: Refinasi Nomor Token dengan TrOCR (Vision Transformer)
-    if (mode === 'token') {
-      const refinedToken = await refineTokenWithTrOCR(imageSource, tesseractResult.data, result.token);
-      if (refinedToken && refinedToken.length === 20) {
-        result.token = refinedToken;
-      }
-    }
-
-    return result;
     
   } catch (error) {
     console.error('Extraction Error:', error);

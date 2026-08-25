@@ -1,4 +1,4 @@
-import { processReceipt, processPdf, preprocessImage } from './ocr';
+import { processReceipt, processPdf, preprocessImage, getOcrWorker } from './ocr';
 import { printViaRawBT } from './rawbt';
 // import { registerSW } from 'virtual:pwa-register';
 
@@ -13,6 +13,11 @@ window.onerror = function(msg, url, line) {
   console.error("Global Error:", msg, url, line);
 };
 console.log("Main.js loaded");
+
+// Pre-warm OCR worker silently in background for instant scanning
+setTimeout(() => {
+  getOcrWorker().catch(e => console.warn('[OCR Prewarm]:', e.message));
+}, 500);
 
 // DOM Elements
 const scannerSection = document.getElementById('scanner-section');
